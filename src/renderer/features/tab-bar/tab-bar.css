@@ -1,0 +1,112 @@
+/* The tab strip doubles as the window's title bar: empty space after the tabs drags the window
+   (the native side moves the window; see setTitleBarLayout). */
+#tab-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: var(--tab-height);
+  padding-left: var(--space-4);
+  /* Leave room for the window controls that the system draws over the right edge. */
+  padding-right: var(--window-controls-width, 0px);
+  background: var(--color-strip);
+}
+
+.tab-list {
+  display: flex;
+  gap: var(--space-3);
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Every tab is its own outlined box. */
+.tab {
+  display: flex;
+  flex: 0 1 var(--tab-max-width);
+  align-items: center;
+  gap: var(--space-2);
+  min-width: var(--tab-min-width);
+  height: var(--tab-box-height);
+  padding: 0 var(--space-3) 0 var(--tab-padding-x);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-tab-bg);
+  color: var(--color-fg-muted);
+}
+
+.tab:hover {
+  border-color: var(--color-fg-muted);
+  color: var(--color-fg-soft);
+}
+
+.tab[data-active='true'] {
+  border-color: var(--color-accent);
+  color: var(--color-fg-strong);
+}
+
+.tab__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab[data-loading='true'] .tab__title::before {
+  content: '';
+  display: inline-block;
+  width: var(--space-2);
+  height: var(--space-2);
+  margin-right: var(--space-3);
+  vertical-align: middle;
+  background: var(--color-accent);
+  animation: tab-pulse 1s ease-in-out infinite;
+}
+
+.tab__close,
+.tab-new {
+  display: grid;
+  flex: none;
+  place-items: center;
+  border-radius: var(--radius);
+  color: var(--color-fg-muted);
+}
+
+.tab__close {
+  width: calc(var(--tab-box-height) - var(--space-3));
+  height: calc(var(--tab-box-height) - var(--space-3));
+  /* Close buttons stay out of the way until the tab is hovered or active. */
+  opacity: 0;
+}
+
+.tab:hover .tab__close,
+.tab[data-active='true'] .tab__close {
+  opacity: 1;
+}
+
+.tab-new {
+  width: var(--tab-box-height);
+  height: var(--tab-box-height);
+  border: var(--border-width) solid var(--color-border);
+  background: var(--color-tab-bg);
+}
+
+.tab__close:hover,
+.tab-new:hover {
+  color: var(--color-fg-strong);
+}
+
+.tab-new:hover {
+  border-color: var(--color-fg-muted);
+}
+
+@keyframes tab-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab[data-loading='true'] .tab__title::before {
+    animation: none;
+  }
+}

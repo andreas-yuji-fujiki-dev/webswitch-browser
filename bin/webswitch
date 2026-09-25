@@ -1,0 +1,4 @@
+#!/bin/sh
+# Starts Webswitch from a built checkout (run `npm run build` first).
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+exec gjs -m "$DIR/dist/main.js" "$@"

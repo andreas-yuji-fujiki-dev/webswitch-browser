@@ -1,0 +1,38 @@
+<!doctype html>
+<title>heavy page</title>
+<style>
+  body { font: 14px/1.4 sans-serif; margin: 0; background: linear-gradient(#fafafa, #e8e8f0); }
+  .card { display: inline-block; width: 150px; margin: 4px; padding: 8px; border-radius: 6px;
+          background: linear-gradient(135deg, #fff, #dde); box-shadow: 0 1px 4px rgba(0,0,0,.25); }
+  table { border-collapse: collapse; width: 100%; } td { border: 1px solid #ccc; padding: 2px 6px; }
+</style>
+<body>
+  <div id="cards"></div>
+  <table id="table"></table>
+  <svg id="svg" width="900" height="300"></svg>
+  <canvas id="canvas" width="900" height="300"></canvas>
+<script>
+  // Roughly the weight of a busy web page: thousands of nodes, a big table, SVG and a canvas.
+  const cards = document.getElementById('cards');
+  for (let i = 0; i < 1500; i++) {
+    const d = document.createElement('div');
+    d.className = 'card';
+    d.textContent = 'Card ' + i + ' lorem ipsum dolor sit amet ' + (i * 7919 % 1000);
+    cards.appendChild(d);
+  }
+  const table = document.getElementById('table');
+  for (let r = 0; r < 800; r++) {
+    const tr = table.insertRow();
+    for (let c = 0; c < 8; c++) tr.insertCell().textContent = 'r' + r + 'c' + c;
+  }
+  const svg = document.getElementById('svg');
+  for (let i = 0; i < 600; i++) {
+    const s = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    s.setAttribute('cx', (i * 37) % 900); s.setAttribute('cy', (i * 53) % 300); s.setAttribute('r', 6);
+    s.setAttribute('fill', 'hsl(' + (i * 13 % 360) + ',70%,60%)');
+    svg.appendChild(s);
+  }
+  const ctx = document.getElementById('canvas').getContext('2d');
+  for (let i = 0; i < 3000; i++) { ctx.fillStyle = 'hsl(' + (i % 360) + ',60%,55%)'; ctx.fillRect((i * 29) % 880, (i * 17) % 280, 20, 20); }
+  addEventListener('load', () => navigator.sendBeacon('/loaded' + location.search));
+</script>

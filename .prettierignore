@@ -1,0 +1,6 @@
+node_modules
+.vite
+out
+LICENSE
+package-lock.json
+dist

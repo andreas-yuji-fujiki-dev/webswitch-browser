@@ -1,0 +1,12 @@
+<!doctype html>
+<title>Opener</title>
+<body>
+  <script>
+    window.got = null;
+    window.addEventListener('message', (event) => {
+      window.got = event.data;
+    });
+    // Every OAuth sign-in opens its page like this: a popup that must stay linked to its opener.
+    window.startPopup = () => !!window.open('/child.html', 'oauth', 'width=420,height=520');
+  </script>
+</body>

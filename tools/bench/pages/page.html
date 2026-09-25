@@ -1,0 +1,7 @@
+<!doctype html>
+<title>bench page</title>
+<body style="font-family: sans-serif"><h1>bench page</h1>
+<script>
+  // Tells the harness the page finished loading, with the id of the browser being measured.
+  addEventListener('load', () => navigator.sendBeacon('/loaded' + location.search));
+</script>

@@ -1,0 +1,55 @@
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-ui);
+  font-size: var(--font-size);
+  line-height: var(--line-height);
+  cursor: default;
+  user-select: none;
+}
+
+input {
+  user-select: text;
+}
+
+::selection {
+  background: var(--color-selection-bg);
+  color: var(--color-selection-fg);
+}
+
+button:focus-visible {
+  outline: var(--border-width) solid var(--color-accent);
+  outline-offset: calc(var(--border-width) * -1);
+}
+
+.icon {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+}
+
+.icon--filled {
+  fill: currentColor;
+  stroke: none;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+#chrome {
+  flex: none;
+  background: var(--color-surface);
+}

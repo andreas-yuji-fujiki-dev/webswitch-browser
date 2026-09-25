@@ -1,0 +1,75 @@
+/* Every color, size and font of the UI is defined here so user.css can override all of it. */
+:root {
+  color-scheme: dark light;
+
+  --color-strip: #000000;
+  --color-bg: #000000;
+  --color-surface: #000000;
+  --color-surface-raised: #1f1f1f;
+  --color-surface-hover: #272727;
+  --color-input-bg: #000000;
+  --color-tab-bg: #000000;
+  --color-border: #272727;
+  --color-fg: #d3d3d3;
+  --color-fg-strong: #eff3bc;
+  --color-fg-soft: #bcbcbc;
+  --color-fg-muted: #6b6b6b;
+  --color-accent: #e8adb9;
+  --color-info: #63afc5;
+  --color-success: #8bc98d;
+  --color-danger: #e8adb9;
+  --color-brand: #e8adb9;
+  --color-selection-bg: #e8adb9;
+  --color-selection-fg: #000000;
+
+  --radius: 0;
+  --border-width: 1px;
+  --accent-idle-strength: 45%;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+
+  --tab-height: 56px;
+  --tab-box-height: 36px;
+  --tab-padding-x: 20px;
+  --tab-min-width: 120px;
+  --tab-max-width: 240px;
+  --toolbar-height: 56px;
+  --control-size: 36px;
+  --icon-size: 18px;
+  --loading-bar-height: 2px;
+
+  --font-ui: 'Inter', 'Noto Sans', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  --font-size: 14px;
+  --line-height: 1.4;
+  --wordmark-size: 48px;
+  --wordmark-dim: 0.55;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --color-strip: #eff3bc;
+    --color-bg: #eff3bc;
+    --color-surface: #eff3bc;
+    --color-surface-raised: #e3e7b3;
+    --color-surface-hover: #d3d3d3;
+    --color-input-bg: #d3d3d3;
+    --color-tab-bg: #d3d3d3;
+    --color-border: #bcbcbc;
+    --color-fg: #1a1a1a;
+    --color-fg-strong: #000000;
+    --color-fg-soft: #272727;
+    --color-fg-muted: #6b6b6b;
+    --color-accent: #e8adb9;
+    --color-info: #409cb9;
+    --color-success: #718f97;
+    --color-danger: #6b6b6b;
+    --color-brand: #e8adb9;
+    --color-selection-bg: #e8adb9;
+    --color-selection-fg: #000000;
+  }
+}

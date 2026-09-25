@@ -1,0 +1,42 @@
+{
+  "name": "webswitch",
+  "productName": "Webswitch",
+  "version": "0.0.1",
+  "description": "A minimal, private, CSS-stylable web browser for developers on WebKitGTK. Zero requests of its own.",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "author": {
+    "name": "Andreas Pinheiro",
+    "email": "andreaspinheiroprincipal@gmail.com"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node scripts/build.mjs && gjs -m dist/main.js",
+    "make": "node scripts/build.mjs && node scripts/make.mjs",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tools.json",
+    "format": "prettier --write .",
+    "selftest": "sh scripts/selftest.sh",
+    "measure": "tools/measure-net.sh"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@girs/gdk-4.0": "^5.4.0",
+    "@girs/gdkx11-4.0": "^5.4.0",
+    "@girs/gio-2.0": "^5.4.0",
+    "@girs/gjs": "^5.4.0",
+    "@girs/glib-2.0": "^5.4.0",
+    "@girs/gobject-2.0": "^5.4.0",
+    "@girs/gtk-4.0": "^5.4.0",
+    "@girs/javascriptcore-6.0": "^5.4.0",
+    "@girs/webkit-6.0": "^5.4.0",
+    "@types/node": "^24.13.6",
+    "eslint": "^10.11.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.9",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.70.1",
+    "vite": "^8.3.0"
+  }
+}

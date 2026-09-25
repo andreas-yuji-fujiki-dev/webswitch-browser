@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Webswitch
+Comment=A minimal, private web browser for developers
+Exec=webswitch
+Icon=dev.webswitch.Webswitch
+Terminal=false
+Categories=Network;WebBrowser;
+StartupWMClass=dev.webswitch.Webswitch

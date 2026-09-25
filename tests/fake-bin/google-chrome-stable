@@ -1,0 +1,3 @@
+#!/bin/sh
+# Stands in for Chrome in the self-test: records how it was called instead of opening a window.
+printf '%s\n' "$@" > "$WEBSWITCH_SELFTEST_OUT/drm-args.txt"

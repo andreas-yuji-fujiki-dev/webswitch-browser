@@ -1,0 +1,17 @@
+<!doctype html>
+<title>Child popup</title>
+<body>
+  popup
+  <script>
+    window.info = {
+      hasOpener: !!window.opener,
+      hasBrowserApi: typeof window.browserApi !== 'undefined',
+      hasBridge: !!(
+        window.webkit &&
+        window.webkit.messageHandlers &&
+        window.webkit.messageHandlers.ipc
+      ),
+    };
+    if (window.opener) window.opener.postMessage({ token: 'abc123', from: location.origin }, '*');
+  </script>
+</body>

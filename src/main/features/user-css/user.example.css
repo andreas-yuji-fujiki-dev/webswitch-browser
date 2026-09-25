@@ -1,0 +1,83 @@
+/*
+ * Webswitch user.css
+ *
+ * Loaded after every built-in style, so anything here wins.
+ * Reloads automatically when you save the file.
+ *
+ * Every color, size and font of the interface is a CSS custom property.
+ * Uncomment a line (remove the surrounding comment marks) and edit its value.
+ */
+
+/* Colors: dark theme, used when your system prefers dark */
+:root {
+  /* --color-strip: #000000; */
+  /* --color-bg: #000000; */
+  /* --color-surface: #000000; */
+  /* --color-surface-raised: #1f1f1f; */
+  /* --color-surface-hover: #272727; */
+  /* --color-input-bg: #000000; */
+  /* --color-tab-bg: #000000; */
+  /* --color-border: #272727; */
+  /* --color-fg: #d3d3d3; */
+  /* --color-fg-strong: #eff3bc; */
+  /* --color-fg-soft: #bcbcbc; */
+  /* --color-fg-muted: #6b6b6b; */
+  /* --color-accent: #e8adb9; */
+  /* --color-info: #63afc5; */
+  /* --color-success: #8bc98d; */
+  /* --color-danger: #e8adb9; */
+  /* --color-brand: #e8adb9; */
+  /* --color-selection-bg: #e8adb9; */
+  /* --color-selection-fg: #000000; */
+}
+
+/* Colors: light theme, used when your system prefers light */
+@media (prefers-color-scheme: light) {
+  :root {
+    /* --color-strip: #eff3bc; */
+    /* --color-bg: #eff3bc; */
+    /* --color-surface: #eff3bc; */
+    /* --color-fg: #1a1a1a; */
+  }
+}
+
+/* Force a single theme regardless of the system setting */
+:root {
+  /* color-scheme: dark; */
+}
+
+/* Shape and spacing */
+:root {
+  /* --radius: 0; */
+  /* --border-width: 1px; */
+  /* --accent-idle-strength: 45%; */
+  /* --space-1: 4px; */
+  /* --space-2: 8px; */
+  /* --space-3: 12px; */
+  /* --space-4: 16px; */
+  /* --space-5: 24px; */
+  /* --tab-height: 56px; */
+  /* --tab-box-height: 36px; */
+  /* --tab-padding-x: 20px; */
+  /* --tab-min-width: 120px; */
+  /* --tab-max-width: 240px; */
+  /* --toolbar-height: 56px; */
+  /* --control-size: 36px; */
+  /* --icon-size: 18px; */
+  /* --loading-bar-height: 2px; */
+}
+
+/* Typography */
+:root {
+  /* --font-ui: 'Inter', 'Noto Sans', system-ui, sans-serif; */
+  /* --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace; */
+  /* --font-size: 14px; */
+  /* --line-height: 1.4; */
+  /* --wordmark-size: 48px; */
+  /* --wordmark-dim: 0.55; */
+}
+
+/* Beyond variables, you can style any element. For example: */
+/*
+.tab__close { display: none; }
+*/

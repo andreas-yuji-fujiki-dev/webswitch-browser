@@ -1,0 +1,151 @@
+.hist-page {
+  width: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: var(--space-5) var(--space-4);
+  color: var(--color-fg);
+}
+
+.hist-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.hist-title {
+  margin: 0;
+  color: var(--color-fg-strong);
+  font-size: calc(var(--font-size) * 1.5);
+  font-weight: 600;
+}
+
+.hist-search {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-size);
+  padding: 0 var(--space-4);
+  border: var(--border-width) solid
+    color-mix(in srgb, var(--color-accent) var(--accent-idle-strength), transparent);
+  border-radius: var(--radius);
+  background: var(--color-input-bg);
+  color: var(--color-fg);
+  outline: none;
+}
+
+.hist-search::placeholder {
+  color: var(--color-fg-muted);
+}
+
+.hist-search:focus {
+  border-color: var(--color-accent);
+  color: var(--color-fg-strong);
+}
+
+.hist-clear,
+.hist-more {
+  padding: var(--space-1) var(--space-3);
+  color: var(--color-fg-muted);
+  white-space: nowrap;
+}
+
+.hist-clear:hover:not(:disabled),
+.hist-more:hover,
+.hist-clear[data-armed='true'] {
+  color: var(--color-accent);
+}
+
+.hist-clear:disabled {
+  opacity: 0.4;
+}
+
+.hist-list {
+  margin-top: var(--space-5);
+}
+
+.hist-day {
+  margin: var(--space-5) 0 var(--space-2);
+  color: var(--color-fg-muted);
+  font-size: var(--font-size);
+  font-weight: 500;
+}
+
+.hist-group:first-child .hist-day {
+  margin-top: 0;
+}
+
+.hist-row {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius);
+}
+
+.hist-row:hover {
+  background: var(--color-surface-raised);
+}
+
+.hist-open {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: var(--space-4);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+}
+
+.hist-time {
+  flex: none;
+  color: var(--color-fg-muted);
+  font-family: var(--font-mono);
+  font-size: calc(var(--font-size) - 1px);
+}
+
+.hist-entry-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hist-url {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-fg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hist-open:hover .hist-entry-title {
+  color: var(--color-accent);
+}
+
+.hist-remove {
+  display: none;
+  place-items: center;
+  flex: none;
+  width: var(--control-size);
+  height: var(--control-size);
+  color: var(--color-fg-muted);
+}
+
+.hist-row:hover .hist-remove {
+  display: grid;
+}
+
+.hist-remove:hover {
+  color: var(--color-accent);
+}
+
+.hist-more {
+  display: block;
+  margin: var(--space-4) auto 0;
+}
+
+.hist-empty {
+  margin: var(--space-5) 0;
+  color: var(--color-fg-muted);
+  text-align: center;
+}
