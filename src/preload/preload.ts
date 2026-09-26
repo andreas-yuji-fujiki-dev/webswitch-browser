@@ -84,6 +84,18 @@ const browserApi: BrowserApi = {
         listener();
       }),
   },
+  cookies: {
+    get: () => invoke(IPC_CHANNELS.cookies.get),
+    remove: (ids) => invoke(IPC_CHANNELS.cookies.remove, ids),
+    setPolicy: (ids, policy) => invoke(IPC_CHANNELS.cookies.setPolicy, ids, policy),
+    setCompanyPolicy: (company, policy) =>
+      invoke(IPC_CHANNELS.cookies.setCompanyPolicy, company, policy),
+    openAccountPanel: (company) => invoke(IPC_CHANNELS.cookies.openAccountPanel, company),
+    onChanged: (listener) =>
+      subscribe(IPC_CHANNELS.cookies.changed, () => {
+        listener();
+      }),
+  },
   keybindings: {
     get: () => invoke(IPC_CHANNELS.keybindings.get),
     set: (actionId, accelerators) => invoke(IPC_CHANNELS.keybindings.set, actionId, accelerators),

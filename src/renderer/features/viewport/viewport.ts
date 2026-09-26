@@ -2,6 +2,7 @@ import type { BrowserApi } from '~types/browser-api';
 import type { InternalPage } from '~types/tabs';
 import type { BuiltInPage, StateView } from '~types/ui';
 import { el } from '../../core/dom';
+import { createCookiesPage } from '../cookies/cookies-page';
 import { createHistoryPage } from '../history/history-page';
 import { createKeybindingsPage } from '../keybindings/keybindings-page';
 
@@ -13,6 +14,7 @@ export function createViewport(container: HTMLElement, api: BrowserApi): StateVi
   const factories: Record<InternalPage, () => BuiltInPage> = {
     keybindings: () => createKeybindingsPage(api),
     history: () => createHistoryPage(api),
+    cookies: () => createCookiesPage(api),
   };
   // Pages are built once and kept, so an edit in progress survives every state event.
   const pages: Partial<Record<InternalPage, BuiltInPage>> = {};

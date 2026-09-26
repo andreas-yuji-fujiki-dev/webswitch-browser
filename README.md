@@ -62,7 +62,23 @@ The address bar takes a URL (`https://example.com`, `example.com`, `localhost:30
 
 ## The ⋮ menu
 
-An icon-only menu at the right end of the toolbar: switch, sign in with Google, check for updates, history and keybindings. **Keybindings**, **History** and **Sign in with Google** work; **Switch** and **Check for updates** are placeholders for features on the [to-do list](to-do.md).
+An icon-only menu at the right end of the toolbar: switch, cookies and accounts (the user icon), check for updates, history and keybindings. **Keybindings**, **History** and **Cookies and accounts** work; **Switch** and **Check for updates** are placeholders for features on the [to-do list](to-do.md).
+
+## Cookies and accounts
+
+The user icon in the ⋮ menu opens the Cookies page: every cookie in the browser, grouped by company (Google, Microsoft, and any other site under its own name).
+
+- **What it shows:** for each cookie its name, site, what it does behind the scenes (in plain words), when Webswitch first saw it, when it expires, its flags (Secure, HttpOnly, SameSite) and what kind it is (sign-in, security, preferences, analytics). The filter starts on **Sign-in**; **All** shows everything and **Restricted** shows only the ones you disabled or limited.
+- **Search** by cookie name, site, company or what it does.
+- **Account panel:** companies Webswitch knows have a button that opens their account page in a tab (for example **Google account panel**, **Microsoft account panel**; also Meta, Apple, Amazon, GitHub, LinkedIn, X, Spotify, Netflix, Dropbox, Reddit and Adobe). A Google button stays at the top of the page, so you can sign in even before there is a Google cookie.
+- **Disable / Enable:** a disabled cookie is no longer sent to any site, but Webswitch keeps it, so **Enable** brings the login back.
+- **One rule per company:** inside each group, a bar sets a rule for **all** of that company's cookies at once: **Allowed everywhere**, **Disabled**, or **Only on…** the sites you list (for example, every Google cookie only on `google.com` and `youtube.com`). The rule also covers the cookies the company sets later, so it does not need redoing. A cookie you set by hand (Enable, Disable or Only on… on that cookie) keeps its own choice and is not overruled by the company rule; the badge on each cookie says when its state comes from the company rule.
+- **Only on…** (per cookie): allow a cookie only while a tab is on the sites you list (for example `youtube.com`). It is taken out of the browser when no tab is on those sites and put back before the request when you type one of those addresses, click a link or send a form to it.
+- **Remove:** deletes the cookie for good, after a confirmation that says what stops working (for a Google sign-in cookie: you are signed out of Google and "Sign in with Google" stops working on other sites until you sign in again). Each company also has **Remove all**, which deletes the cookies currently shown for it.
+
+The page never shows cookie values. Webswitch keeps a copy of the disabled and restricted cookies (values included) in `~/.local/share/webswitch/cookie-policies.json`, readable only by you, next to the browser's own cookie database, which already holds the same values in plain text.
+
+Limits worth knowing: WebKit does not store creation dates, so "first seen" starts counting when Webswitch first runs with this feature (older cookies say "before tracking"). A redirect the site makes by itself, or a script that changes the address, can reach a restricted site before its cookie is back; reload once. The explanations come from a built-in list of well-known cookies and name patterns; for a cookie it does not know, it says so. Cookies of the Chrome used for DRM pages (Netflix, Spotify) live in that Chrome's own profile and are not managed here.
 
 ## Signing in with Google
 

@@ -19,9 +19,13 @@
 }
 
 /* Every tab is its own outlined box. */
+/* The width limit is a max-width, not only a flex-basis: WebKit sizes the tab list from the tabs'
+   natural (title) widths and ignores a flex-basis there, which left empty space inside the list
+   and pushed the "+" button away from the last tab. */
 .tab {
   display: flex;
-  flex: 0 1 var(--tab-max-width);
+  flex: 0 1 auto;
+  max-width: var(--tab-max-width);
   align-items: center;
   gap: var(--space-2);
   min-width: var(--tab-min-width);

@@ -1,5 +1,6 @@
 import type { IPC_CHANNELS } from '~shared/ipc-channels';
 import type { AccountState } from './account';
+import type { CookiePolicy, CookiesState } from './cookies';
 import type { HistoryEntry } from './history';
 import type { KeybindingResult, KeybindingsState, ShortcutActionId } from './keybindings';
 import type { MenuItemId, MenuState } from './menu';
@@ -30,6 +31,14 @@ export interface IpcInvokeMap {
   [IPC_CHANNELS.history.query]: { args: [search: string, limit: number]; result: HistoryEntry[] };
   [IPC_CHANNELS.history.remove]: { args: [visitedAt: number]; result: void };
   [IPC_CHANNELS.history.clear]: { args: []; result: void };
+  [IPC_CHANNELS.cookies.get]: { args: []; result: CookiesState };
+  [IPC_CHANNELS.cookies.remove]: { args: [ids: string[]]; result: void };
+  [IPC_CHANNELS.cookies.setPolicy]: { args: [ids: string[], policy: CookiePolicy]; result: void };
+  [IPC_CHANNELS.cookies.setCompanyPolicy]: {
+    args: [company: string, policy: CookiePolicy];
+    result: void;
+  };
+  [IPC_CHANNELS.cookies.openAccountPanel]: { args: [company: string]; result: void };
   [IPC_CHANNELS.keybindings.get]: { args: []; result: KeybindingsState };
   [IPC_CHANNELS.keybindings.set]: {
     args: [actionId: ShortcutActionId, accelerators: string[]];
@@ -49,6 +58,7 @@ export interface IpcEventMap {
   [IPC_CHANNELS.menu.stateChanged]: MenuState;
   [IPC_CHANNELS.account.changed]: AccountState;
   [IPC_CHANNELS.history.changed]: null;
+  [IPC_CHANNELS.cookies.changed]: null;
   [IPC_CHANNELS.keybindings.changed]: KeybindingsState;
   [IPC_CHANNELS.userCss.changed]: string;
 }

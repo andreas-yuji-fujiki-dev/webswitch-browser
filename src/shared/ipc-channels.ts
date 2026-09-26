@@ -38,6 +38,14 @@ export const IPC_CHANNELS = {
     clear: 'history:clear',
     changed: 'history:changed',
   },
+  cookies: {
+    get: 'cookies:get',
+    remove: 'cookies:remove',
+    setPolicy: 'cookies:set-policy',
+    setCompanyPolicy: 'cookies:set-company-policy',
+    openAccountPanel: 'cookies:open-account-panel',
+    changed: 'cookies:changed',
+  },
   keybindings: {
     get: 'keybindings:get',
     set: 'keybindings:set',

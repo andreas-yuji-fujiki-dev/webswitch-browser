@@ -1,4 +1,5 @@
 import type { AccountState } from './account';
+import type { CookiePolicy, CookiesState } from './cookies';
 import type { HistoryEntry } from './history';
 import type { KeybindingResult, KeybindingsState, ShortcutActionId } from './keybindings';
 import type { MenuItemId, MenuState } from './menu';
@@ -51,6 +52,21 @@ export interface BrowserApi {
     query: (search: string, limit: number) => Promise<HistoryEntry[]>;
     remove: (visitedAt: number) => Promise<void>;
     clear: () => Promise<void>;
+    onChanged: (listener: () => void) => Unsubscribe;
+  };
+  cookies: {
+    get: () => Promise<CookiesState>;
+    /** Deletes the cookies from the browser and from Webswitch's own copies. */
+    remove: (ids: string[]) => Promise<void>;
+    /** `active` restores a disabled or restricted cookie; the others take it out of the browser. */
+    setPolicy: (ids: string[], policy: CookiePolicy) => Promise<void>;
+    /**
+     * One rule for every cookie of a company, including the ones it sets later: `disabled`, or
+     * `only-on` some sites. `active` removes the rule. Cookies set individually keep their own rule.
+     */
+    setCompanyPolicy: (company: string, policy: CookiePolicy) => Promise<void>;
+    /** Opens the account page of a known company (Google, Microsoft, ...) in a tab. */
+    openAccountPanel: (company: string) => Promise<void>;
     onChanged: (listener: () => void) => Unsubscribe;
   };
   keybindings: {

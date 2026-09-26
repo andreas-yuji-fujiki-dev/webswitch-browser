@@ -31,6 +31,8 @@ export function createTabView(
     permissions: PermissionsService;
     /** Takes a page this engine cannot play (DRM); true when another program opened it. */
     handOff: (url: string, source: WebKit.WebView) => boolean;
+    /** A promise when cookies must be restored before `url` is requested, else null. */
+    prepareNavigation: (url: string) => Promise<void> | null;
   },
   related?: WebKit.WebView,
 ): WebKit.WebView {
@@ -64,6 +66,26 @@ export function createTabView(
         debug('policy', `link to ${uri} handed to the DRM browser`);
         decision.ignore();
         return true;
+      }
+      // Clicked links and form posts wait for the cookies that are only allowed on the target site.
+      const kind = action.get_navigation_type();
+      if (
+        kind === WebKit.NavigationType.LINK_CLICKED ||
+        kind === WebKit.NavigationType.FORM_SUBMITTED
+      ) {
+        const pending = deps.prepareNavigation(uri);
+        if (pending) {
+          // The decision is answered later; WebKit keeps waiting while the object is referenced.
+          void pending.then(
+            () => {
+              decision.use();
+            },
+            () => {
+              decision.use();
+            },
+          );
+          return true;
+        }
       }
     }
     return false;

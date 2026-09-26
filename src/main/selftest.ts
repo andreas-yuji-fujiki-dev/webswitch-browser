@@ -2,6 +2,7 @@ import GLib from 'gi://GLib?version=2.0';
 import Gdk from 'gi://Gdk?version=4.0';
 import GObject from 'gi://GObject?version=2.0';
 import Gtk from 'gi://Gtk?version=4.0';
+import Soup from 'gi://Soup?version=3.0';
 import WebKit from 'gi://WebKit?version=6.0';
 import System from 'system';
 import type { BrowserContext } from '~types/bootstrap';
@@ -330,10 +331,258 @@ async function scenario(context: BrowserContext): Promise<void> {
   );
   tabs.zoomActiveTab('reset');
 
+  // The "+" button must stay next to the last tab whatever the titles are. WebKit once sized the
+  // tab list from the natural title widths, leaving hundreds of pixels between them.
+  await ipc(`window.browserApi.navigation.navigate('${SITE}/long-title.html')`);
+  await waitFor(() =>
+    (state().tabs.find((tab) => tab.id === state().activeTabId)?.title ?? '').startsWith(
+      'Portal do Aluno',
+    ),
+  );
+  await sleep(300);
+  const plusGap = await ipc<number>(
+    `(() => { const tabs = [...document.querySelectorAll('.tab')]; const last = tabs[tabs.length - 1].getBoundingClientRect(); return Math.round(document.querySelector('.tab-new').getBoundingClientRect().left - last.right); })()`,
+  );
+  check(
+    'the + button stays next to the last tab (long title)',
+    plusGap >= 0 && plusGap <= 24,
+    `${plusGap}px`,
+  );
+
+  // ── Cookies: listing, explaining, disabling, "only on these sites", removing ────────────────
+  const { cookies } = context;
+  const cookieNamed = async (name: string) =>
+    (await cookies.getState()).cookies.find((entry) => entry.name === name);
+  const pageBody = async (): Promise<string> =>
+    String(await evaluate(activeView(), "document.getElementById('c')?.textContent ?? ''"));
+  const titleIs = (title: string) => () =>
+    state().tabs.find((tab) => tab.id === state().activeTabId)?.title === title;
+
+  // Other tabs on localhost would keep a cookie "allowed only on localhost" in the browser, so the
+  // scenarios below run with a single tab.
+  for (const tab of state().tabs) {
+    if (tab.id !== state().activeTabId) tabs.closeTab(tab.id);
+  }
+  await sleep(300);
+  await ipc(`window.browserApi.navigation.navigate('${SITE}/two.html')`);
+  await waitFor(titleIs('Page Two'));
+  await evaluate(activeView(), "document.cookie = 'sessionid=abc123; path=/'");
+  check(
+    'a cookie set by a page appears in the cookie manager',
+    await waitFor(async () => (await cookieNamed('sessionid')) !== undefined),
+  );
+  let cookie = await cookieNamed('sessionid');
+  const cookieId = cookie?.id ?? '';
+  check('it is recognised as a sign-in cookie', cookie?.kind === 'authentication', cookie?.kind);
+  check('and explained in plain words', (cookie?.explanation.length ?? 0) > 30);
+  check(
+    'its first-seen date is recorded',
+    await waitFor(async () => ((await cookieNamed('sessionid'))?.firstSeen ?? 0) > 0),
+  );
+
+  // Cookies of several companies, added straight to the browser (fake values), to check the grouping,
+  // the explanations and the account panels.
+  const seed = async (name: string, domain: string, secure = false): Promise<void> => {
+    const cookie = new Soup.Cookie(name, 'fake-value', domain, '/', 3600);
+    cookie.set_secure(secure);
+    await context.session.get_cookie_manager().add_cookie(cookie, null);
+  };
+  await seed('SID', '.google.com');
+  await seed('__Secure-1PSID', '.google.com', true);
+  await seed('MSPAuth', '.live.com');
+  await seed('MoodleSession', 'moodle.example.edu.br');
+  await seed('_ga', '.example.co.uk');
+  await waitFor(async () => (await cookieNamed('MoodleSession')) !== undefined);
+  const catalog = await cookies.getState();
+  console.log(
+    `seeded cookies as listed: ${catalog.cookies.map((entry) => `${entry.name}@${entry.domain}`).join(', ')}`,
+  );
+  const google = catalog.cookies.find((entry) => entry.name === 'SID');
+  check(
+    'a Google cookie is grouped under Google and explained',
+    google?.company === 'Google' &&
+      google.kind === 'authentication' &&
+      google.explanation.includes('Google'),
+    `${google?.company} ${google?.kind}`,
+  );
+  check(
+    'Google has an account panel and a sign-out warning',
+    catalog.companies.find((c) => c.name === 'Google')?.accountPanel?.url ===
+      'https://myaccount.google.com/' &&
+      (catalog.companies.find((c) => c.name === 'Google')?.removalWarning ?? '').includes(
+        'Sign in with Google',
+      ),
+  );
+  check(
+    'a Microsoft cookie is grouped under Microsoft with its own panel',
+    (await cookieNamed('MSPAuth'))?.company === 'Microsoft' &&
+      catalog.companies.find((c) => c.name === 'Microsoft')?.accountPanel?.url ===
+        'https://account.microsoft.com/',
+  );
+  check(
+    'a cookie that belongs only to a subdomain is listed too',
+    (await cookieNamed('MoodleSession'))?.domain === 'moodle.example.edu.br',
+  );
+  check(
+    'an unknown site is its own group, without a panel',
+    (await cookieNamed('MoodleSession'))?.company === 'example.edu.br' &&
+      catalog.companies.find((c) => c.name === 'example.edu.br')?.accountPanel === null,
+  );
+  check(
+    'an analytics cookie is told apart from sign-in',
+    (await cookieNamed('_ga'))?.kind === 'analytics' &&
+      (await cookieNamed('_ga'))?.company === 'example.co.uk',
+  );
+
+  tabs.openPage('cookies');
+  await sleep(800);
+  check(
+    'the Cookies page lists it, grouped by company',
+    (await ipc<number>("document.querySelectorAll('.ck-row').length")) >= 1 &&
+      (await ipc<number>("document.querySelectorAll('.ck-group').length")) >= 1,
+  );
+  await screenshot(ui, 'ui-cookies');
+  tabs.closeActiveTab();
+  await sleep(300);
+
+  await cookies.setPolicy([cookieId], { mode: 'disabled', sites: [] });
+  cookie = await cookieNamed('sessionid');
+  check(
+    'disabling keeps it listed but takes it out of the browser',
+    cookie?.mode === 'disabled' && !cookie.inJar,
+  );
+  check(
+    'and the page no longer sees it',
+    !String(await evaluate(activeView(), 'document.cookie')).includes('sessionid'),
+  );
+  await cookies.setPolicy([cookieId], { mode: 'active', sites: [] });
+  cookie = await cookieNamed('sessionid');
+  check(
+    'enabling puts it back',
+    cookie?.mode === 'active' &&
+      cookie.inJar &&
+      String(await evaluate(activeView(), 'document.cookie')).includes('sessionid=abc123'),
+  );
+
+  await cookies.setPolicy([cookieId], { mode: 'only-on', sites: ['other.test'] });
+  cookie = await cookieNamed('sessionid');
+  check(
+    'a cookie allowed only on other sites is not in the browser here',
+    cookie?.mode === 'only-on' && !cookie.inJar,
+  );
+  await cookies.setPolicy([cookieId], { mode: 'only-on', sites: ['localhost'] });
+  check(
+    'and is in the browser while a tab is on its site',
+    (await cookieNamed('sessionid'))?.inJar === true,
+  );
+
+  // Leaving its site takes it out; coming back through the address bar restores it before the request.
+  await ipc("window.browserApi.navigation.navigate('http://127.0.0.1:8765/two.html')");
+  await waitFor(titleIs('Page Two'));
+  check(
+    'leaving the site takes the cookie out of the browser',
+    await waitFor(async () => (await cookieNamed('sessionid'))?.inJar === false),
+  );
+  await ipc(`window.browserApi.navigation.navigate('${SITE}/echo-cookie')`);
+  await waitFor(titleIs('echo-cookie'));
+  check(
+    'a typed address gets its cookie back before the request',
+    (await pageBody()).includes('sessionid=abc123'),
+    await pageBody(),
+  );
+
+  // The same through a clicked link from another site (the navigation policy waits for the cookie).
+  await ipc("window.browserApi.navigation.navigate('http://127.0.0.1:8765/cookie-link.html')");
+  await waitFor(titleIs('cookie link'));
+  check(
+    'before the click the cookie is out of the browser',
+    await waitFor(async () => (await cookieNamed('sessionid'))?.inJar === false),
+  );
+  await evaluate(activeView(), "document.getElementById('go').click()");
+  await waitFor(titleIs('echo-cookie'));
+  check(
+    'a clicked link gets its cookie back before the request',
+    (await pageBody()).includes('sessionid=abc123'),
+    await pageBody(),
+  );
+
+  await cookies.setPolicy([cookieId], { mode: 'only-on', sites: ['other.test'] });
+  await ipc(`window.browserApi.navigation.navigate('${SITE}/echo-cookie')`);
+  await sleep(1200);
+  check(
+    'a cookie not allowed on this site is not sent to it',
+    !(await pageBody()).includes('sessionid'),
+  );
+
+  await cookies.remove([cookieId]);
+  check('removing deletes it for good', (await cookieNamed('sessionid')) === undefined);
+  await cookies.remove(
+    (await cookies.getState()).cookies
+      .filter((entry) =>
+        ['SID', '__Secure-1PSID', 'MSPAuth', 'MoodleSession', '_ga'].includes(entry.name),
+      )
+      .map((entry) => entry.id),
+  );
+
+  // ── One rule for every cookie of a company, new cookies included ──────────────────────────────
+  await ipc(`window.browserApi.navigation.navigate('${SITE}/two.html')`);
+  await waitFor(titleIs('Page Two'));
+  await evaluate(activeView(), "document.cookie = 'sessionid=one; path=/'");
+  await waitFor(async () => (await cookieNamed('sessionid')) !== undefined);
+  await cookies.setCompanyPolicy('localhost', { mode: 'only-on', sites: [] });
+  check(
+    'a company rule with no valid site is refused',
+    (await cookies.getState()).companies.find((c) => c.name === 'localhost')?.mode === 'active',
+  );
+  await cookies.setCompanyPolicy('localhost', { mode: 'disabled', sites: [] });
+  let first = await cookieNamed('sessionid');
+  check(
+    'a company rule disables the cookies the company already has',
+    first?.mode === 'disabled' && first.origin === 'company' && !first.inJar,
+  );
+  await evaluate(activeView(), "document.cookie = 'authtoken=two; path=/'");
+  check(
+    'and the ones the site sets later',
+    await waitFor(async () => {
+      const later = await cookieNamed('authtoken');
+      return later?.mode === 'disabled' && later.origin === 'company' && !later.inJar;
+    }),
+  );
+  await cookies.setPolicy([first?.id ?? ''], { mode: 'active', sites: [] });
+  first = await cookieNamed('sessionid');
+  check(
+    'a single cookie can be allowed on purpose despite the rule',
+    first?.mode === 'active' && first.inJar,
+  );
+  await sleep(1200);
+  check('and later passes do not take it back', (await cookieNamed('sessionid'))?.inJar === true);
+
+  await cookies.setCompanyPolicy('localhost', { mode: 'only-on', sites: ['other.test'] });
+  const limited = await cookieNamed('authtoken');
+  check(
+    'a company rule "only on" other sites keeps its cookies out here',
+    limited?.mode === 'only-on' && limited.sites.includes('other.test') && !limited.inJar,
+  );
+  await cookies.setCompanyPolicy('localhost', { mode: 'only-on', sites: ['localhost'] });
+  check('and lets them in on the allowed site', (await cookieNamed('authtoken'))?.inJar === true);
+
+  await cookies.setCompanyPolicy('localhost', { mode: 'active', sites: [] });
+  const released = (await cookies.getState()).cookies.filter((c) =>
+    ['sessionid', 'authtoken'].includes(c.name),
+  );
+  check(
+    'removing the company rule releases all its cookies',
+    released.length === 2 && released.every((c) => c.mode === 'active' && c.inJar),
+  );
+  await cookies.remove(released.map((c) => c.id));
+
   // DRM sites are handed to a Chromium app window; the tab must stay where it was.
   const urlBefore = state().tabs.find((tab) => tab.id === state().activeTabId)?.url;
   await ipc("window.browserApi.navigation.navigate('https://www.netflix.com/browse')");
-  const drmArgs = await readText(GLib.build_filenamev([OUT, 'drm-args.txt']));
+  // The fake Chrome is started asynchronously; wait for the file it writes.
+  const drmArgsPath = GLib.build_filenamev([OUT, 'drm-args.txt']);
+  await waitFor(async () => (await readText(drmArgsPath)) !== null);
+  const drmArgs = await readText(drmArgsPath);
   check(
     'a DRM site opens in a Chromium app window',
     drmArgs?.includes('--app=https://www.netflix.com/browse') === true,

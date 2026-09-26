@@ -3,6 +3,7 @@ import type WebKit from 'gi://WebKit?version=6.0';
 import type { IpcRouter } from '../main/core/ipc-router';
 import type { MainWindow } from '../main/core/window';
 import type { AccountService } from '../main/features/account/account.service';
+import type { CookiesService } from '../main/features/cookies/cookies.service';
 import type { HistoryService } from '../main/features/history/history.service';
 import type { KeybindingsService } from '../main/features/keybindings/keybindings.service';
 import type { MenuService } from '../main/features/menu/menu.service';
@@ -26,6 +27,7 @@ export interface BrowserContext {
   history: HistoryService;
   userCss: UserCssService;
   account: AccountService;
+  cookies: CookiesService;
   menu: MenuService;
 }
 

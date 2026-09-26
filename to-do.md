@@ -16,6 +16,9 @@
 - [ ] Choose the search engine in settings; opt-in search suggestions.
 - [ ] Unit tests for the services (`url-resolver.ts` is already a pure function).
 
+- [ ] Cookies page: grow the built-in list of known cookies and companies; optionally encrypt the stored copies of disabled cookies.
+- [ ] Cookies "only on": cover redirects and scripted navigations (today only typed addresses, clicked links and form posts wait for the cookie to be restored).
+
 ## P2 — Ecosystem
 
 - [ ] **Extensions.** WebKitGTK has no WebExtensions API yet (Igalia is porting it to the GTK/WPE ports upstream; GNOME Web's support is partial). Options: follow upstream and adopt it when it lands, or build a small extension host ourselves.

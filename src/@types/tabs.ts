@@ -4,7 +4,7 @@ import type { EmbedHandle } from './drm';
 import type { HistoryVisit } from './history';
 
 /** Pages the browser draws itself instead of loading from the web. */
-export type InternalPage = 'keybindings' | 'history';
+export type InternalPage = 'keybindings' | 'history' | 'cookies';
 
 export interface TabError {
   code: number;
@@ -74,6 +74,10 @@ export interface TabsServiceDeps {
   onPageVisit: (visit: HistoryVisit) => void;
   /** Lets a page's popup (`window.open` with features) live in its own small window. */
   openPopup: (view: WebKit.WebView) => void;
+  /** True when a cookie that is only allowed on `url`'s site has to be restored before loading it. */
+  needsCookiePrep: (url: string) => boolean;
+  /** Restores those cookies; resolves when the browser has them. */
+  prepareCookies: (url: string) => Promise<void>;
   /** True for pages that need DRM, which this engine cannot play. */
   needsDrm: (url: string) => boolean;
   /** Embeds a Chromium window over `view` showing `url`; null when embedding is not available. */

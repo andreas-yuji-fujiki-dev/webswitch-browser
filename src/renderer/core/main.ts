@@ -7,6 +7,7 @@ import '../features/viewport/viewport.css';
 import '../features/menu/menu.css';
 import '../features/keybindings/keybindings.css';
 import '../features/history/history.css';
+import '../features/cookies/cookies.css';
 
 import { createAddressBar } from '../features/address-bar/address-bar';
 import { createMenuButton } from '../features/menu/menu-button';

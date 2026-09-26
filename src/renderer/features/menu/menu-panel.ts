@@ -28,7 +28,9 @@ export function mountMenuPanel(root: HTMLElement, api: BrowserApi): void {
   function showAccount(signedIn: boolean): void {
     if (!userButton) return;
     userButton.dataset.signedIn = String(signedIn);
-    userButton.title = signedIn ? 'Google account' : 'Sign in with Google';
+    userButton.title = signedIn
+      ? 'Cookies and accounts (Google signed in)'
+      : 'Cookies and accounts';
     userButton.setAttribute('aria-label', userButton.title);
   }
   showAccount(false);

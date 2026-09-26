@@ -22,6 +22,8 @@ import { resolveInput } from '../features/navigation/url-resolver';
 import { parseUrl } from './url';
 import { registerAccountIpc } from '../features/account/account.ipc';
 import { AccountService } from '../features/account/account.service';
+import { registerCookiesIpc } from '../features/cookies/cookies.ipc';
+import { CookiesService } from '../features/cookies/cookies.service';
 import { DrmService } from '../features/drm/drm.service';
 import {
   EmbedService,
@@ -104,6 +106,13 @@ async function start(app: Gtk.Application, options: BootstrapOptions): Promise<B
   const userCss = new UserCssService();
   const account = new AccountService(session);
   const drm = new DrmService();
+  // Hosts of the pages open tabs are on; a cookie that is only allowed on some sites follows them.
+  const openHosts = (): string[] =>
+    tabs
+      .getState()
+      .tabs.map((tab) => parseUrl(tab.url)?.host)
+      .filter((host): host is string => host !== undefined && host !== null);
+  const cookies = new CookiesService(session, openHosts);
   // A DRM page goes to an embedded Chromium window when embedding is on, else to an app window.
   const routeDrm = (url: string, source?: WebKit.WebView): boolean => {
     if (!drm.needsDrm(url)) return false;
@@ -115,13 +124,24 @@ async function start(app: Gtk.Application, options: BootstrapOptions): Promise<B
   };
   const tabs = new TabsService({
     stack: main.stack,
-    createView: (related) => createTabView({ session, permissions, handOff: routeDrm }, related),
+    createView: (related) =>
+      createTabView(
+        {
+          session,
+          permissions,
+          handOff: routeDrm,
+          prepareNavigation: (url) => (cookies.needsPrepare(url) ? cookies.prepare(url) : null),
+        },
+        related,
+      ),
     focusAddressBar,
     focusUi,
     onPageVisit: (visit) => {
       history.record(visit);
     },
     handOff: routeDrm,
+    needsCookiePrep: (url) => cookies.needsPrepare(url),
+    prepareCookies: (url) => cookies.prepare(url),
     needsDrm: (url) => drm.needsDrm(url),
     attachEmbed: (view, url) => embed?.attach(view, url) ?? null,
     openPopup: (view) => {
@@ -202,16 +222,21 @@ async function start(app: Gtk.Application, options: BootstrapOptions): Promise<B
   registerMenuIpc(router, menu);
   registerKeybindingsIpc(router, keybindings, shortcuts);
   registerHistoryIpc(router, history);
+  registerCookiesIpc(router, cookies, (url) => {
+    tabs.createTab(url);
+  });
   registerAccountIpc(router, account);
   registerUserCssIpc(router, userCss);
   registerUiIpc(router, main);
   menu.onSelect((itemId) => {
     if (itemId === 'keybindings' || itemId === 'history') tabs.openPage(itemId);
-    if (itemId === 'user') tabs.createTab(account.entryUrl());
+    if (itemId === 'user') tabs.openPage('cookies');
   });
 
   // Keep the window title in sync with the active tab.
   tabs.onStateChanged((state) => {
+    // Tabs moved between sites: cookies that are only allowed on some sites may have to come or go.
+    cookies.scheduleSync();
     const active = state.tabs.find((tab) => tab.id === state.activeTabId);
     main.window.set_title(active?.title ? `${active.title} — ${APP_NAME}` : APP_NAME);
   });
@@ -219,7 +244,13 @@ async function start(app: Gtk.Application, options: BootstrapOptions): Promise<B
     userCss.dispose();
   });
 
-  await Promise.all([userCss.init(), keybindings.init(), history.init(), account.init()]);
+  await Promise.all([
+    userCss.init(),
+    keybindings.init(),
+    history.init(),
+    account.init(),
+    cookies.init(),
+  ]);
 
   // Tell the UI how wide the window buttons are once they have been laid out.
   const announceControls = (): void => {
@@ -253,6 +284,7 @@ async function start(app: Gtk.Application, options: BootstrapOptions): Promise<B
     history,
     userCss,
     account,
+    cookies,
     menu,
   };
   await options.onReady?.(context);

@@ -29,6 +29,7 @@ const MIDDLE_BUTTON = 2;
 const PAGE_TITLES: Record<InternalPage, string> = {
   keybindings: 'Keybindings',
   history: 'History',
+  cookies: 'Cookies',
 };
 // A `create` handler that refuses to open a window returns NULL, which the typings do not allow.
 const NO_WINDOW = null as unknown as Gtk.Widget;
@@ -115,7 +116,7 @@ export class TabsService {
     }
     this.releaseEmbed(tab);
     this.tabs.delete(id);
-    this.deps.stack.remove(tab.view);
+    if (tab.view.get_parent() === this.deps.stack) this.deps.stack.remove(tab.view);
     // Frees the web process and the signal handlers; done after the current signal has returned.
     GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
       tab.view.run_dispose();
@@ -206,7 +207,14 @@ export class TabsService {
     tab.failedUrl = null;
     tab.error = null;
     tab.page = null;
-    tab.view.load_uri(url);
+    // A cookie that is only allowed on this site must be back in the browser before the request.
+    if (this.deps.needsCookiePrep(url)) {
+      void this.deps.prepareCookies(url).then(() => {
+        if (this.tabs.get(id) === tab && tab.pendingUrl === url) tab.view.load_uri(url);
+      });
+    } else {
+      tab.view.load_uri(url);
+    }
     this.scheduleNotify();
   }
 
@@ -410,7 +418,12 @@ export class TabsService {
     }
 
     const created = this.deps.createView(source);
+    let shown = false;
     created.connect('ready-to-show', () => {
+      // WebKit can announce the same window again (the page keeps configuring it); adding one view
+      // as two tabs would leave the second tab pointing at a view the first one destroyed.
+      if (shown) return;
+      shown = true;
       const { width, height } = created.get_window_properties().get_geometry();
       // WebKit reports 100x100 when the page asked for no size (a plain link); a real popup has one.
       const wantsSize =
