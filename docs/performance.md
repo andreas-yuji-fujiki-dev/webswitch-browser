@@ -45,3 +45,18 @@ node tools/bench/bench.mjs --browsers webswitch          # only ours
 ```
 
 It starts each browser in its own process group with a temporary profile, sums PSS from `/proc/<pid>/smaps_rollup` over every process in that group, and reads CPU time from `/proc/<pid>/stat`. Results move with the machine, the engine version and the desktop: compare browsers within one run, not across machines.
+
+## Software drawing of tabs (2026-09-26)
+
+Tab views draw without GPU compositing (`hardware_acceleration_policy = NEVER`) because fixed headers jumped and text flickered while scrolling fast on a 144 Hz hybrid laptop (see `README.md`, "If the screen flickers"). One `tools/bench` run each (WebKitGTK 2.52.6), software vs `WEBSWITCH_HW_ACCEL=1`:
+
+| Measure               | Software    | GPU compositing |
+| --------------------- | ----------- | --------------- |
+| Startup (loaded)      | 485 ms      | 471 ms          |
+| 1 tab, memory         | 291 MB      | 300 MB          |
+| 5 heavy tabs, memory  | 615 MB      | 659 MB          |
+| Idle CPU (1 / 5 tabs) | 0.1 / 0.5 % | 0 / 0.3 %       |
+| JS suite total        | 984 ms      | 871 ms          |
+| canvas 2D 150k ops    | 110 ms      | 56 ms           |
+
+Only one run per configuration, so differences of about 10 % (the JS suite) are within noise; the canvas 2D test being twice as slow is the one clear effect. CPU use while scrolling and WebGL/video pages were not measured.

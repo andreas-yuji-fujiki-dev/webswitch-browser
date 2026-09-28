@@ -26,6 +26,28 @@ button {
   padding: 0;
   border: 0;
   background: none;
+  cursor: pointer;
+}
+
+/* The pointer hand says "you can click this"; a button that cannot be clicked stays an arrow. */
+button:disabled {
+  cursor: default;
+}
+
+select,
+a[href],
+[role='button'],
+[role='tab'],
+[role='menuitem'],
+[role='switch'],
+input[type='checkbox'],
+input[type='radio'],
+summary {
+  cursor: pointer;
+}
+
+input:disabled,
+select:disabled {
   cursor: default;
 }
 

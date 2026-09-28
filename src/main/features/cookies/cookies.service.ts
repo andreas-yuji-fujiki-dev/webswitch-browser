@@ -9,6 +9,7 @@ import type {
   CookieSameSite,
   CookieStoreFile,
   CookiesState,
+  CookiesSummary,
   StoredCookie,
 } from '~types/cookies';
 import { debug } from '../../core/debug';
@@ -167,6 +168,25 @@ export class CookiesService {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  /** Who has a sign-in cookie in the browser, and how many cookies there are in all. */
+  async summary(): Promise<CookiesSummary> {
+    const { cookies } = await this.getState();
+    const signedIn = [
+      ...new Set(
+        cookies
+          .filter((cookie) => cookie.kind === 'authentication' && cookie.inJar)
+          .map((c) => c.company),
+      ),
+    ].sort((a, b) => a.localeCompare(b));
+    return { signedIn, total: cookies.length };
+  }
+
+  /** Every cookie in the jar, as WebKit keeps it (for extensions that hold the cookies permission). */
+  async allSoupCookies(): Promise<Soup.Cookie[]> {
+    const jar = await this.enqueue(() => this.readCookieJar());
+    return jar ? [...jar.values()] : [];
   }
 
   async getState(): Promise<CookiesState> {
@@ -330,6 +350,7 @@ export class CookiesService {
   }
 
   private async sync(): Promise<void> {
+    const began = GLib.get_monotonic_time();
     const jar = await this.readCookieJar();
     if (!jar) return;
     const now = Date.now();
@@ -340,7 +361,12 @@ export class CookiesService {
     }
     this.applyCompanyRules(jar);
     await this.applyPolicies(jar);
+    const saving = GLib.get_monotonic_time();
     this.save();
+    debug(
+      'cookies',
+      `sync: ${((GLib.get_monotonic_time() - began) / 1000).toFixed(1)} ms in total, ${((GLib.get_monotonic_time() - saving) / 1000).toFixed(1)} ms of it writing the file, ${jar.size} cookies`,
+    );
   }
 
   /** A cookie without a rule of its own gets its company's rule, so new cookies are covered too. */

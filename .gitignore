@@ -92,3 +92,6 @@ out/
 
 # Build output
 dist/
+
+# The self-test's own build
+dist-selftest/

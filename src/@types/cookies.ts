@@ -135,3 +135,11 @@ export interface KnownCookie {
 
 /** Every cookie in the browser's jar, keyed by cookie id. */
 export type CookieJar = Map<string, Soup.Cookie>;
+
+/** The short version of the cookie state that the menu shows under "Cookies and accounts". */
+export interface CookiesSummary {
+  /** Companies with a sign-in cookie in the browser right now. */
+  signedIn: string[];
+  /** Every cookie in the browser. */
+  total: number;
+}

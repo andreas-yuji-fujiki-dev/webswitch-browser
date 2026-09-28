@@ -1,53 +1,30 @@
-import Gdk from 'gi://Gdk?version=4.0';
 import GLib from 'gi://GLib?version=2.0';
-import Gtk from 'gi://Gtk?version=4.0';
 import type WebKit from 'gi://WebKit?version=6.0';
 import type { Unsubscribe } from '~types/common';
-import type { MenuAnchor, MenuItemId, MenuSize, MenuState } from '~types/menu';
+import type { MenuItemId, MenuState } from '~types/menu';
+import { debug } from '../../core/debug';
+import type { MainWindow } from '../../core/window';
 
-// Used only until the menu view reports its real size.
-const INITIAL_SIZE: MenuSize = { width: 54, height: 230 };
-const GAP = 4;
-// Clicking the button that opened the menu first closes it (a click outside), then fires the
-// click; without this guard the same click would open it again.
-const REOPEN_GUARD_US = 250_000;
+const EMIT_INTERVAL_MS = 16;
 
 /**
- * The dropdown menu is a popover holding its own small web view (the same bundled UI, loaded with
- * `?view=menu`). A popover floats above everything, page views included, and closes itself when
- * the user clicks anywhere else.
+ * The menu is a panel that takes the right half of the window, below the tab strip and the
+ * toolbar, while the page takes the left half. Its content is the same bundled UI, loaded in its
+ * own web view with `?view=menu`. The layout itself (who gets which half) lives in `MainWindow`.
  */
 export class MenuService {
-  private readonly popover = new Gtk.Popover();
-  private readonly holder = new Gtk.ScrolledWindow({
-    hscrollbar_policy: Gtk.PolicyType.NEVER,
-    vscrollbar_policy: Gtk.PolicyType.NEVER,
-    propagate_natural_width: false,
-    propagate_natural_height: false,
-  });
   private readonly listeners = new Set<(state: MenuState) => void>();
   private readonly selectListeners = new Set<(itemId: MenuItemId) => void>();
-  private anchor: MenuAnchor = { right: 0, bottom: 0 };
-  private size: MenuSize = INITIAL_SIZE;
-  private closedAt = 0;
+  private emitTimer = 0;
 
   constructor(
-    parent: Gtk.Widget,
+    private readonly main: MainWindow,
     private readonly view: WebKit.WebView,
   ) {
-    // A web view reports a natural size as big as the window, and a popover takes its child's
-    // natural size. The holder pins the popover to exactly the size of the menu's icons.
-    this.holder.set_child(view);
-    this.applySize();
-    this.popover.add_css_class('ws-menu');
-    this.popover.set_has_arrow(false);
-    this.popover.set_autohide(true);
-    this.popover.set_position(Gtk.PositionType.BOTTOM);
-    this.popover.set_child(this.holder);
-    this.popover.set_parent(parent);
-    this.popover.connect('closed', () => {
-      this.closedAt = GLib.get_monotonic_time();
-      this.emitState();
+    main.setSidePanel(view);
+    // The UI's own page area makes room for the panel, so it must hear about every resize.
+    main.onSidePanelFraction(() => {
+      if (this.isOpen()) this.scheduleEmit();
     });
   }
 
@@ -70,52 +47,42 @@ export class MenuService {
     for (const listener of this.selectListeners) listener(itemId);
   }
 
-  toggle(anchor: MenuAnchor): void {
-    if (this.popover.get_visible()) {
-      this.close();
-    } else if (GLib.get_monotonic_time() - this.closedAt > REOPEN_GUARD_US) {
-      this.anchor = anchor;
-      this.place();
-      this.popover.popup();
-      this.emitState();
-    }
+  toggle(): void {
+    debug('menu', `toggle (now ${this.isOpen() ? 'open' : 'closed'})`);
+    if (this.isOpen()) this.close();
+    else this.open();
   }
 
-  isOpen(): boolean {
-    return this.popover.get_visible();
+  open(): void {
+    if (this.isOpen()) return;
+    this.main.setSidePanelOpen(true);
+    // The panel takes the keyboard so Escape closes it.
+    this.view.grab_focus();
+    this.emitState();
   }
 
   close(): void {
-    if (this.popover.get_visible()) this.popover.popdown();
+    if (!this.isOpen()) return;
+    this.main.setSidePanelOpen(false);
+    this.emitState();
   }
 
-  setSize(size: MenuSize): void {
-    if (!(size.width > 0 && size.height > 0)) return;
-    this.size = { width: Math.ceil(size.width), height: Math.ceil(size.height) };
-    this.applySize();
-    if (this.popover.get_visible()) this.place();
+  isOpen(): boolean {
+    return this.main.isSidePanelOpen();
   }
 
-  private applySize(): void {
-    this.holder.set_min_content_width(this.size.width);
-    this.holder.set_min_content_height(this.size.height);
-    this.view.set_size_request(this.size.width, this.size.height);
-  }
-
-  /** A popover centres on the rectangle it points at, so give it one as wide as the menu. */
-  private place(): void {
-    this.popover.set_pointing_to(
-      new Gdk.Rectangle({
-        x: Math.round(this.anchor.right - this.size.width),
-        y: Math.round(this.anchor.bottom + GAP),
-        width: this.size.width,
-        height: 1,
-      }),
-    );
+  /** A drag changes the width many times a second; the UI is told at most once per frame. */
+  private scheduleEmit(): void {
+    if (this.emitTimer !== 0) return;
+    this.emitTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, EMIT_INTERVAL_MS, () => {
+      this.emitTimer = 0;
+      this.emitState();
+      return GLib.SOURCE_REMOVE;
+    });
   }
 
   private emitState(): void {
-    const state: MenuState = { open: this.popover.get_visible() };
+    const state: MenuState = { open: this.isOpen(), fraction: this.main.getSidePanelFraction() };
     for (const listener of this.listeners) listener(state);
   }
 }

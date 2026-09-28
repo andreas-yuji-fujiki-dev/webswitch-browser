@@ -6,22 +6,50 @@ import WebKit from 'gi://WebKit?version=6.0';
 import System from 'system';
 import { IPC_CHANNELS } from '~shared/ipc-channels';
 import type { BootstrapOptions, BrowserContext } from '~types/bootstrap';
-import { APP_ID, APP_NAME, DEFAULT_SEARCH_ENGINE, UI_HOST, UI_SCHEME } from './config';
+import { APP_ID, APP_NAME, searchEngineFor, UI_HOST, UI_SCHEME } from './config';
+import { debug } from './debug';
+import { InspectorFrame } from './inspector-frame';
 import { handleDownloads } from './downloads';
+import { applyGpuChoice } from './gpu';
+import { applySessionPreferences, applyTabPreferences } from './preferences';
+import { captureEnvironment, restartBrowser } from './restart';
 import { ensureDir, readText } from './files';
 import { IpcRouter } from './ipc-router';
 import { migrateLegacyData } from './legacy-migration';
 import { cacheDir, configDir, dataDir, distDir } from './paths';
 import { openPopupWindow } from './popup-window';
-import { followSystemColorScheme, isDark } from './theme';
+import { BROWSERS } from '~shared/browsers-catalog';
+import type { BrowserId } from '~types/browsers';
+import type { RequestVerdict } from '~types/extensions';
+import type { DrmBrowser } from '~types/drm';
+import { askCredentials } from './auth-dialog';
+import { chooseFolder, chooseJsonFile } from './file-dialog';
+import { followSystemColorScheme, setChromeColors } from './theme';
 import { registerUiIpc } from './ui-ipc';
+import { loadUiState, saveUiState } from './ui-state';
 import { registerUiScheme } from './ui-scheme';
 import { createTabView, createUiView } from './webviews';
-import { MainWindow } from './window';
+import { registerExtensionsIpc } from '../features/extensions/extensions.ipc';
+import { ExtensionRuntime } from '../features/extensions/extension-runtime';
+import { registerExtensionScheme } from '../features/extensions/extension-scheme';
+import { ExtensionsService } from '../features/extensions/extensions.service';
+import { MainWindow, refreshWindowStyles } from './window';
 import { resolveInput } from '../features/navigation/url-resolver';
-import { parseUrl } from './url';
+import { isWebUrl, parseUrl } from './url';
 import { registerAccountIpc } from '../features/account/account.ipc';
 import { AccountService } from '../features/account/account.service';
+import { registerSettingsIpc } from '../features/settings/settings.ipc';
+import { SettingsService } from '../features/settings/settings.service';
+import { DevToolsPanelService } from '../features/devtools/devtools-panel.service';
+import { registerDevToolsIpc } from '../features/devtools/devtools.ipc';
+import { registerDevToolsScheme } from '../features/devtools/devtools-scheme';
+import { DevToolsService } from '../features/devtools/devtools.service';
+import { OpenVsx } from '../features/themes/openvsx';
+import { Http } from './http';
+import { registerThemesIpc } from '../features/themes/themes.ipc';
+import { ThemesService } from '../features/themes/themes.service';
+import { registerBrowsersIpc } from '../features/browsers/browsers.ipc';
+import { anyBrowserInstalled, BrowsersService } from '../features/browsers/browsers.service';
 import { registerCookiesIpc } from '../features/cookies/cookies.ipc';
 import { CookiesService } from '../features/cookies/cookies.service';
 import { DrmService } from '../features/drm/drm.service';
@@ -51,7 +79,11 @@ function color(hex: string): Gdk.RGBA {
   return rgba;
 }
 
-async function start(app: Gtk.Application, options: BootstrapOptions): Promise<BrowserContext> {
+async function start(
+  app: Gtk.Application,
+  options: BootstrapOptions,
+  settings: SettingsService,
+): Promise<BrowserContext> {
   followSystemColorScheme();
   ensureDir(configDir());
   ensureDir(dataDir());
@@ -59,7 +91,15 @@ async function start(app: Gtk.Application, options: BootstrapOptions): Promise<B
   await migrateLegacyData();
 
   const dist = distDir();
-  registerUiScheme(GLib.build_filenamev([dist, 'renderer']));
+  const themes = new ThemesService();
+  setChromeColors(themes.resolved().colors);
+  // theme.css is made from the theme in use, so the UI starts with its colors: no flash of the old ones.
+  registerUiScheme(GLib.build_filenamev([dist, 'renderer']), (name) =>
+    name === 'theme.css' ? themes.css() : null,
+  );
+  const devtools = new DevToolsService();
+  registerDevToolsScheme(devtools);
+  debug('devtools', `state at start: ${JSON.stringify(devtools.getState())}`);
   const preload = await readText(GLib.build_filenamev([dist, 'preload.js']));
   if (preload === null) throw new Error('dist/preload.js is missing; run `npm run build`');
 
@@ -74,25 +114,49 @@ async function start(app: Gtk.Application, options: BootstrapOptions): Promise<B
       GLib.build_filenamev([dataDir(), 'cookies.sqlite']),
       WebKit.CookiePersistentStorage.SQLITE,
     );
-  handleDownloads(session);
+  handleDownloads(session, () => settings.get('downloadFolder'));
+  applySessionPreferences(session, settings);
   // Spellcheck dictionaries would be downloaded from a server, so spellcheck stays off.
   WebKit.WebContext.get_default().set_spell_checking_enabled(false);
 
   const permissions = new PermissionsService();
   const router = new IpcRouter();
   const uiSession = WebKit.NetworkSession.new_ephemeral();
-  const dark = isDark();
   const uiView = createUiView(
     { session: uiSession, router, preload },
-    color(dark ? '#000000' : '#eff3bc'),
+    color(themes.resolved().colors.bg),
   );
   const menuView = createUiView(
     { session: uiSession, router, preload },
-    color('rgba(0,0,0,0)'),
+    color(themes.resolved().colors.bg),
     uiView,
   );
 
   const main = new MainWindow(app, uiView);
+  let uiInspectorTab: number | null = null;
+  const inspectorFrame = new InspectorFrame(main);
+  const devtoolsPanel = new DevToolsPanelService(
+    main,
+    devtools,
+    uiView,
+    color(themes.resolved().colors.bg),
+    (url) => {
+      tabs.createTab(url);
+    },
+  );
+  inspectorFrame.watch(uiView);
+  // The menu panel keeps the width the user gave it, also across runs.
+  const uiState = await loadUiState();
+  if (uiState.menuFraction !== undefined) main.setSidePanelFraction(uiState.menuFraction, false);
+  if (uiState.devtoolsFraction !== undefined) {
+    main.setDevToolsFraction(uiState.devtoolsFraction, false);
+  }
+  main.onDevToolsFraction((fraction, committed) => {
+    if (committed) void saveUiState({ devtoolsFraction: fraction });
+  });
+  main.onSidePanelFraction((fraction, committed) => {
+    if (committed) void saveUiState({ menuFraction: fraction });
+  });
   const focusUi = (): void => {
     uiView.grab_focus();
   };
@@ -105,7 +169,12 @@ async function start(app: Gtk.Application, options: BootstrapOptions): Promise<B
   const history = new HistoryService();
   const userCss = new UserCssService();
   const account = new AccountService(session);
-  const drm = new DrmService();
+  const browsers = new BrowsersService(
+    (): string | null => drm.findSystemBrowser()?.name ?? null,
+    () => ({ available: embed !== null, wanted: settings.get('embedStreaming') }),
+  );
+  // Netflix, Spotify and the like use the browser chosen in Test in other browsers, else the system's.
+  const drm = new DrmService((): DrmBrowser | null => browsers.streamingExecutable());
   // Hosts of the pages open tabs are on; a cookie that is only allowed on some sites follows them.
   const openHosts = (): string[] =>
     tabs
@@ -129,8 +198,38 @@ async function start(app: Gtk.Application, options: BootstrapOptions): Promise<B
         {
           session,
           permissions,
+          prefs: settings,
           handOff: routeDrm,
           prepareNavigation: (url) => (cookies.needsPrepare(url) ? cookies.prepare(url) : null),
+          attachExtensions: (view) => {
+            extensionRuntime.attachTab(view);
+          },
+          allowExtensionNavigation: (view, uri): boolean =>
+            extensionRuntime.allowsTabNavigation(view, uri),
+          reportHttpError: (view, url, status): void => {
+            tabs.reportHttpError(view, url, status);
+          },
+          interceptNavigation: (view, url, type): RequestVerdict | Promise<RequestVerdict> | null =>
+            extensionRuntime.interceptNavigation(view, url, type),
+          authenticate: (view, request) => {
+            // Sign-in with a certificate or a trust question is not a password: WebKit's own handling stays.
+            const kind = request.get_scheme();
+            if (
+              kind === WebKit.AuthenticationScheme.CLIENT_CERTIFICATE_REQUESTED ||
+              kind === WebKit.AuthenticationScheme.SERVER_TRUST_EVALUATION_REQUESTED
+            ) {
+              return false;
+            }
+            // An extension that keeps logins (a password manager) may answer first.
+            if (
+              !extensionRuntime.authenticate(view, request, () => {
+                askCredentials(main.window, request);
+              })
+            ) {
+              askCredentials(main.window, request);
+            }
+            return true;
+          },
         },
         related,
       ),
@@ -143,22 +242,82 @@ async function start(app: Gtk.Application, options: BootstrapOptions): Promise<B
     needsCookiePrep: (url) => cookies.needsPrepare(url),
     prepareCookies: (url) => cookies.prepare(url),
     needsDrm: (url) => drm.needsDrm(url),
-    attachEmbed: (view, url) => embed?.attach(view, url) ?? null,
+    attachEmbed: (view, url) => embed?.attach(view, drm.embedSpec(url)) ?? null,
+    attachBrowser: (view, spec) => embed?.attach(view, spec) ?? null,
     openPopup: (view) => {
       openPopupWindow(main.window, view);
+    },
+    useChromeDevTools: () => devtools.activeProvider() !== 'webkit',
+    toggleChromeDevTools: (view, tabId) => {
+      devtoolsPanel.toggle(view, tabId);
+    },
+    watchInspector: (view) => {
+      inspectorFrame.watch(view);
+    },
+    toggleUiDevTools: (tabId) => {
+      // Chrome DevTools (or a downloaded one) inspects the UI like it does a page.
+      if (devtools.activeProvider() !== 'webkit') {
+        devtoolsPanel.toggle(uiView, tabId);
+        return;
+      }
+      // The UI view only gets the inspector once somebody asks for it.
+      uiView.get_settings().set_enable_developer_extras(true);
+      const inspector = uiView.get_inspector();
+      if (inspector.get_web_view()) {
+        inspector.close();
+      } else {
+        inspector.show();
+        uiInspectorTab = tabId;
+      }
     },
     setContentFullscreen: (fullscreen) => {
       main.setContentFullscreen(fullscreen);
     },
   });
-  const navigation = new NavigationService(tabs);
-  const menu = new MenuService(main.overlay, menuView);
-  const embed = embeddingAvailable()
-    ? new EmbedService(
-        main.window,
-        () => drm.findBrowser(),
-        () => menu.isOpen(),
-      )
+  const navigation = new NavigationService(tabs, settings);
+  // Extensions run only while the switch in General settings is on (see ExtensionsService.active).
+  const http = new Http();
+  const extensions = new ExtensionsService(http, () => settings.get('extensions'));
+  const extensionRuntime = new ExtensionRuntime(
+    extensions,
+    {
+      listTabs: () => tabs.briefs(),
+      tabIdOf: (view) => tabs.idOfView(view),
+      viewOf: (id) => tabs.viewOfTab(id),
+      createTab: (url, activate) => tabs.createTab(url, { activate }),
+      activateTab: (id) => {
+        tabs.activateTab(id);
+      },
+      updateTab: (id, url) => {
+        tabs.loadUrl(id, url);
+      },
+      closeTab: (id) => {
+        tabs.closeTab(id);
+      },
+      reloadTab: (id) => {
+        tabs.reloadTab(id);
+      },
+      recentlyClosed: () => tabs.recentlyClosed(),
+      onTabsChanged: (listener) => {
+        tabs.onStateChanged(listener);
+      },
+    },
+    http,
+    uiView,
+    {
+      cookieManager: session.get_cookie_manager(),
+      allCookies: () => cookies.allSoupCookies(),
+      history,
+      session,
+      app,
+      searchUrl: (text) =>
+        resolveInput(text, searchEngineFor(settings.get('searchEngine'))) ?? 'about:blank',
+    },
+  );
+  registerExtensionScheme(extensionRuntime);
+  const menu = new MenuService(main, menuView);
+  const embed = embeddingAvailable(settings.get('embedStreaming'), anyBrowserInstalled())
+    ? new EmbedService(main.window)
     : null;
 
   const shortcuts = new ShortcutsService(
@@ -216,27 +375,113 @@ async function start(app: Gtk.Application, options: BootstrapOptions): Promise<B
     keybindings,
   );
   shortcuts.attach(main.window);
+  shortcuts.setExtraShortcuts((accelerator, repeated) =>
+    extensionRuntime.handleShortcut(accelerator, repeated),
+  );
 
   registerTabsIpc(router, tabs);
   registerNavigationIpc(router, navigation);
   registerMenuIpc(router, menu);
   registerKeybindingsIpc(router, keybindings, shortcuts);
   registerHistoryIpc(router, history);
+  registerBrowsersIpc(router, browsers, (id) => {
+    menu.close();
+    if (!BROWSERS.some((browser) => browser.id === id))
+      return { ok: false, error: 'Unknown browser.' };
+    const active = tabs.getState().tabs.find((tab) => tab.id === tabs.getState().activeTabId);
+    const url = active !== undefined && isWebUrl(active.url) ? active.url : 'about:blank';
+    if (id === 'webkit') {
+      // Webswitch itself: a new tab with the same page.
+      tabs.createTab(url === 'about:blank' ? undefined : url);
+      return { ok: true };
+    }
+    if (!browsers.isInstalled(id as BrowserId)) {
+      tabs.openPage('browsers');
+      browsers.requestFocus(id as BrowserId);
+      return { ok: false, error: 'It is not installed yet.' };
+    }
+    const spec = browsers.embedSpec(id as BrowserId, url);
+    if (spec === null || embed === null) {
+      tabs.openPage('browsers');
+      return { ok: false, error: 'Tabs cannot show other browsers yet (see the top of the page).' };
+    }
+    return tabs.openInBrowser(url, spec)
+      ? { ok: true }
+      : { ok: false, error: 'The browser did not start.' };
+  });
+  const openVsx = new OpenVsx(http, themes);
+  registerThemesIpc(router, themes, openVsx, () =>
+    chooseJsonFile(main.window, 'Choose a theme file'),
+  );
+  // A new theme recolors what GTK and the web views draw themselves; the UI reloads theme.css.
+  themes.onChanged(() => {
+    const colors = themes.resolved().colors;
+    setChromeColors(colors);
+    refreshWindowStyles();
+    const background = color(colors.bg);
+    uiView.set_background_color(background);
+    menuView.set_background_color(background);
+    devtoolsPanel.setBackground(background);
+  });
+  registerExtensionsIpc(router, extensions, extensionRuntime, () =>
+    chooseFolder(main.window, 'Choose the folder of an unpacked extension'),
+  );
+  registerDevToolsIpc(router, devtools);
+  registerSettingsIpc(router, settings, () => {
+    const urls = tabs
+      .getState()
+      .tabs.map((tab) => tab.url)
+      .filter(isWebUrl);
+    if (!restartBrowser(app, urls)) debug('restart', 'no command to start the browser again');
+  });
+  // What can change while the browser runs takes effect on every open tab at once.
+  settings.onChanged(() => {
+    tabs.forEachView((view) => {
+      applyTabPreferences(view.get_settings(), settings);
+    });
+    applySessionPreferences(session, settings);
+    // The switch for extensions is one of the settings: the extensions page and the runtime follow it.
+    extensions.settingsChanged();
+  });
   registerCookiesIpc(router, cookies, (url) => {
     tabs.createTab(url);
   });
   registerAccountIpc(router, account);
   registerUserCssIpc(router, userCss);
   registerUiIpc(router, main);
+  // Closing the panel hands the keyboard back to the page.
+  menu.onStateChanged(({ open }) => {
+    if (!open) tabs.focusContent();
+  });
   menu.onSelect((itemId) => {
     if (itemId === 'keybindings' || itemId === 'history') tabs.openPage(itemId);
     if (itemId === 'user') tabs.openPage('cookies');
+    if (itemId === 'settings') tabs.openPage('settings');
+    if (itemId === 'themes') tabs.openPage('themes');
+    if (itemId === 'extensions') tabs.openPage('extensions');
+    if (itemId === 'browsers') tabs.openPage('browsers');
+    if (itemId === 'devSettings') tabs.openPage('dev-settings');
   });
 
   // Keep the window title in sync with the active tab.
   tabs.onStateChanged((state) => {
     // Tabs moved between sites: cookies that are only allowed on some sites may have to come or go.
     cookies.scheduleSync();
+    // The DevTools panel follows the active tab.
+    const live = new Set<WebKit.WebView>();
+    tabs.forEachView((view) => live.add(view));
+    devtoolsPanel.sync(
+      tabs.getActiveView() ?? null,
+      main.stack.get_visible(),
+      live,
+      state.activeTabId,
+    );
+    // The UI is one document shared by the home page and every built-in page: what is inspected
+    // there belongs to the tab it was opened from, and closes when another tab is shown.
+    if (uiInspectorTab !== null && state.activeTabId !== uiInspectorTab) {
+      uiView.get_inspector().close();
+      uiInspectorTab = null;
+    }
     const active = state.tabs.find((tab) => tab.id === state.activeTabId);
     main.window.set_title(active?.title ? `${active.title} — ${APP_NAME}` : APP_NAME);
   });
@@ -285,6 +530,15 @@ async function start(app: Gtk.Application, options: BootstrapOptions): Promise<B
     userCss,
     account,
     cookies,
+    settings,
+    browsers,
+    extensions,
+    extensionRuntime,
+    drm,
+    themes,
+    openVsx,
+    devtools,
+    devtoolsPanel,
     menu,
   };
   await options.onReady?.(context);
@@ -294,7 +548,7 @@ async function start(app: Gtk.Application, options: BootstrapOptions): Promise<B
 /** What the user typed on the command line becomes tabs: the first fills a blank tab if that is all there is. */
 function openFromCommandLine(context: BrowserContext, inputs: string[]): void {
   const urls = inputs
-    .map((input) => resolveInput(input, DEFAULT_SEARCH_ENGINE))
+    .map((input) => resolveInput(input, searchEngineFor(context.settings.get('searchEngine'))))
     .filter((url): url is string => url !== null);
   const { tabs } = context;
   urls.forEach((url, index) => {
@@ -315,9 +569,14 @@ function openFromCommandLine(context: BrowserContext, inputs: string[]): void {
  * Addresses or searches given on the command line open as tabs, in the running browser if there is one.
  */
 export function runBrowser(options: BootstrapOptions = {}): number {
+  captureEnvironment();
+  // Read now, not later: the GPU and X11 choices below are needed before the window exists.
+  const settings = new SettingsService();
+  applyGpuChoice(settings.get('integratedGpuOnly'));
   // Embedded DRM tabs need an X11 window (Wayland cannot embed another program's window).
   // GDK picks its backend when the display opens, which has not happened yet.
-  if (embeddingRequested()) GLib.setenv('GDK_BACKEND', 'x11', true);
+  if (embeddingRequested(settings.get('embedStreaming'), anyBrowserInstalled()))
+    GLib.setenv('GDK_BACKEND', 'x11', true);
   const app = new Gtk.Application({
     // WEBSWITCH_APP_ID gives a run its own identity, so it does not join an open browser
     // (the tests and the benchmarks rely on it).
@@ -330,7 +589,7 @@ export function runBrowser(options: BootstrapOptions = {}): number {
     if (started) return started;
     // The window only exists after some asynchronous setup; without this the app would quit first.
     app.hold();
-    started = start(app, options);
+    started = start(app, options, settings);
     started
       .catch((error: unknown) => {
         console.error(`${APP_NAME} could not start:`, error);

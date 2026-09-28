@@ -2,16 +2,24 @@ import GLib from 'gi://GLib?version=2.0';
 import { debug } from './debug';
 import type WebKit from 'gi://WebKit?version=6.0';
 
-/** Downloads go to the user's Downloads folder, never overwriting an existing file. */
-export function handleDownloads(session: WebKit.NetworkSession): void {
+/** Downloads go to the chosen folder (default: Downloads), never overwriting an existing file. */
+export function handleDownloads(
+  session: WebKit.NetworkSession,
+  /** The folder the user chose in Settings; empty, or one that is not a folder, means Downloads. */
+  chosenFolder: () => string,
+): void {
   session.connect('download-started', (_session, download) => {
     debug('download', `started ${download.get_request().get_uri()}`);
     download.connect('failed', (_download, error) => {
       debug('download-failed', error.message);
     });
     download.connect('decide-destination', (_download, suggested) => {
+      const chosen = chosenFolder();
       const folder =
-        GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DOWNLOAD) ?? GLib.get_home_dir();
+        chosen !== '' && GLib.file_test(chosen, GLib.FileTest.IS_DIR)
+          ? chosen
+          : (GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DOWNLOAD) ??
+            GLib.get_home_dir());
       const destination = uniquePath(folder, suggested || 'download');
       debug('download', `saving to ${destination}`);
       download.set_destination(destination);

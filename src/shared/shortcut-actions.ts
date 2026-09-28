@@ -14,7 +14,7 @@ export const SHORTCUT_ACTIONS = {
   hardReload: { label: 'Reload, ignoring cache', defaults: ['Ctrl+Shift+R', 'Ctrl+F5'] },
   goBack: { label: 'Back', defaults: ['Alt+ArrowLeft'] },
   goForward: { label: 'Forward', defaults: ['Alt+ArrowRight'] },
-  toggleDevTools: { label: 'Developer tools', defaults: ['F12', 'Ctrl+Shift+I'] },
+  toggleDevTools: { label: 'Open developer tools', defaults: ['F12', 'Ctrl+Shift+I'] },
   zoomIn: { label: 'Zoom in', defaults: ['Ctrl+=', 'Ctrl++'] },
   zoomOut: { label: 'Zoom out', defaults: ['Ctrl+-'] },
   zoomReset: { label: 'Reset zoom', defaults: ['Ctrl+0'] },

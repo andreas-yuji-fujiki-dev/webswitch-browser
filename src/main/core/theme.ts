@@ -1,4 +1,6 @@
 import Gtk from 'gi://Gtk?version=4.0';
+import { BUILTIN_THEMES, DARK_THEME } from '~shared/themes-catalog';
+import type { ThemeColors } from '~types/themes';
 
 /** True when the system asks for a dark interface (GTK follows the desktop's color scheme). */
 export function isDark(): boolean {
@@ -28,4 +30,19 @@ export function followSystemColorScheme(): void {
   };
   apply();
   settings.connect('notify::gtk-interface-color-scheme', apply);
+}
+
+let chrome: ThemeColors | null = null;
+
+/** The colors GTK draws itself with (window buttons, the popup frame ...): the active theme's. */
+export function setChromeColors(colors: ThemeColors): void {
+  chrome = colors;
+}
+
+export function chromeColors(): ThemeColors {
+  if (chrome) return chrome;
+  const wanted = isDark() ? DARK_THEME : 'webswitch-light';
+  const theme = BUILTIN_THEMES.find((candidate) => candidate.id === wanted) ?? BUILTIN_THEMES[0];
+  if (!theme) throw new Error('No built-in themes');
+  return theme.colors;
 }

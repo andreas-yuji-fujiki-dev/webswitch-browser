@@ -4,17 +4,25 @@ import '../styles/base.css';
 import '../features/tab-bar/tab-bar.css';
 import '../features/address-bar/address-bar.css';
 import '../features/viewport/viewport.css';
+import '../features/home/home.css';
 import '../features/menu/menu.css';
 import '../features/keybindings/keybindings.css';
 import '../features/history/history.css';
 import '../features/cookies/cookies.css';
+import '../features/settings/settings.css';
+import '../features/themes/themes.css';
+import '../features/browsers/browsers.css';
+import '../features/extensions/extensions.css';
+import '../features/dev-settings/dev-settings.css';
 
 import { createAddressBar } from '../features/address-bar/address-bar';
+import { createExtensionButtons } from '../features/extensions/extension-buttons';
 import { createMenuButton } from '../features/menu/menu-button';
 import { mountMenuPanel } from '../features/menu/menu-panel';
 import { createTabBar } from '../features/tab-bar/tab-bar';
 import { createViewport } from '../features/viewport/viewport';
 import { api } from './api-client';
+import { initTheme } from './theme';
 import { initUserCss } from './user-css';
 
 function requireElement(id: string): HTMLElement {
@@ -37,6 +45,7 @@ async function initBrowserView(): Promise<void> {
     createAddressBar(addressBar, api),
     createViewport(requireElement('viewport'), api),
   ];
+  createExtensionButtons(addressBar, api);
   createMenuButton(addressBar, api);
 
   // The main process places the page views below the chrome, so it needs to know how tall it is.
@@ -57,6 +66,9 @@ async function initBrowserView(): Promise<void> {
 
   await initUserCss();
 }
+
+// The theme comes before the user's CSS, which is appended later and so still wins.
+initTheme(api);
 
 // The same document is loaded twice: as the browser UI and as the transparent menu overlay.
 const view =

@@ -3,6 +3,8 @@
 # result. Screenshots go to $WEBSWITCH_SELFTEST_OUT (default: a fresh folder under /tmp).
 set -e
 cd "$(dirname "$0")/.."
+# Its own build folder: `dist/` may be what a running browser is served from, and a build empties it.
+export WEBSWITCH_OUT_DIR=dist-selftest
 npm run build >/dev/null
 export WEBSWITCH_SELFTEST_OUT="${WEBSWITCH_SELFTEST_OUT:-$(mktemp -d /tmp/webswitch-selftest.XXXXXX)}"
 # A private home for config and data, so the test never touches the real ones.
@@ -10,10 +12,11 @@ export XDG_CONFIG_HOME="$WEBSWITCH_SELFTEST_OUT/config" XDG_DATA_HOME="$WEBSWITC
 # A stand-in for Chrome first in PATH, so the DRM hand-off can be checked without opening a window.
 export PATH="$PWD/tests/fake-bin:$PATH"
 # The self-test covers the app-window hand-off on native Wayland; embedded tabs need X11 and a real Chrome.
-export WEBSWITCH_EMBED_DRM=0
+# (WEBSWITCH_SELFTEST_BROWSERS=1 installs real browsers and shows them in tabs: that needs X11 mode.)
+[ -n "$WEBSWITCH_SELFTEST_BROWSERS" ] || [ "$WEBSWITCH_SELFTEST_X11" = 1 ] || export WEBSWITCH_EMBED_DRM=0
 python3 tests/serve.py &
 SERVER=$!
 trap 'kill $SERVER 2>/dev/null' EXIT
 sleep 1
-gjs -m dist/selftest.js
+gjs -m dist-selftest/selftest.js
 echo "screenshots: $WEBSWITCH_SELFTEST_OUT"

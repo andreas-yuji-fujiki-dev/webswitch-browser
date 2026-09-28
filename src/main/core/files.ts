@@ -51,6 +51,55 @@ export async function appendText(path: string, text: string): Promise<void> {
   await stream.close_async(GLib.PRIORITY_DEFAULT, null);
 }
 
+/** Deletes a folder and everything in it (nothing happens when it does not exist). */
+export function removeTree(path: string): void {
+  const remove = (file: Gio.File): void => {
+    const type = file.query_file_type(Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
+    if (type === Gio.FileType.DIRECTORY) {
+      const children = file.enumerate_children(
+        'standard::name',
+        Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS,
+        null,
+      );
+      for (let info = children.next_file(null); info !== null; info = children.next_file(null)) {
+        remove(file.get_child(info.get_name()));
+      }
+      children.close(null);
+    }
+    file.delete(null);
+  };
+  const root = Gio.File.new_for_path(path);
+  if (root.query_exists(null)) remove(root);
+}
+
+/** The size in bytes of everything under `path`. */
+export function treeSize(path: string): number {
+  const measure = (file: Gio.File): number => {
+    const info = file.query_info(
+      'standard::type,standard::size',
+      Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS,
+      null,
+    );
+    if (info.get_file_type() !== Gio.FileType.DIRECTORY) return info.get_size();
+    let total = 0;
+    const children = file.enumerate_children(
+      'standard::name',
+      Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS,
+      null,
+    );
+    for (let child = children.next_file(null); child !== null; child = children.next_file(null)) {
+      total += measure(file.get_child(child.get_name()));
+    }
+    children.close(null);
+    return total;
+  };
+  try {
+    return measure(Gio.File.new_for_path(path));
+  } catch {
+    return 0;
+  }
+}
+
 /** Creates the file with `text` only if it does not exist, so a user's file is never overwritten. */
 export async function writeTextIfMissing(path: string, text: string): Promise<void> {
   if (!Gio.File.new_for_path(path).query_exists(null)) await writeText(path, text);

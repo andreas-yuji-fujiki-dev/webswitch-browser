@@ -11,6 +11,8 @@ GJS cannot call Xlib, so this small program does it, over stdin/stdout, one comm
   focus                    give keyboard focus to the adopted window
   close                    ask the adopted window to close (WM_DELETE_WINDOW)
   shot <path>              write the container's pixels as a PNG (debugging)
+  shotparent <path>        write the whole Webswitch window (the container's parent) as a PNG (debugging)
+  geometry                 the container's, the adopted window's and the parent's x y width height (debugging)
   quit
 
 Every command answers with one line: "ok ...", "wait" (nothing to adopt yet) or "error ...".
@@ -192,6 +194,15 @@ def exists(w):
     return bool(x11.XGetWindowAttributes(dpy, w, ctypes.byref(attrs)))
 
 
+def keep_in_place():
+    """Some browsers move or resize their own window after it was placed (Edge puts itself at an
+    offset once it has been reparented); the window must fill the container, so it is put back."""
+    a = Attributes()
+    if x11.XGetWindowAttributes(dpy, child, ctypes.byref(a)) and (a.x, a.y, a.width, a.height) != (0, 0, *size):
+        x11.XMoveResizeWindow(dpy, child, 0, 0, *size)
+        x11.XFlush(dpy)
+
+
 def handle(parts):
     global container, child, size
     cmd, args = parts[0], parts[1:]
@@ -225,7 +236,10 @@ def handle(parts):
     if cmd == 'title':
         return f'ok {window_title(child)}' if child else 'error nothing adopted'
     if cmd == 'alive':
-        return f'ok {1 if child and exists(child) else 0}'
+        alive = bool(child and exists(child))
+        if alive:
+            keep_in_place()
+        return f'ok {1 if alive else 0}'
     if cmd == 'place':
         x, y, w, h = (int(v) for v in args)
         size = (max(1, w), max(1, h))
@@ -262,9 +276,20 @@ def handle(parts):
         x11.XSendEvent(dpy, child, 0, 0, ctypes.byref(ev))
         x11.XFlush(dpy)
         return 'ok'
-    if cmd == 'shot':
+    if cmd == 'geometry':
+        def rect(w):
+            a = Attributes()
+            return f'{a.x} {a.y} {a.width} {a.height}' if w and x11.XGetWindowAttributes(dpy, w, ctypes.byref(a)) else 'none'
+        return f'ok container {rect(container)} child {rect(child)} parent {rect(parent_of(container))}'
+    if cmd in ('shot', 'shotparent'):
         target = child or container
-        img = x11.XGetImage(dpy, target, 0, 0, size[0], size[1], 0xFFFFFFFF, 2)  # ZPixmap
+        shot_size = size
+        if cmd == 'shotparent':
+            target = parent_of(container)
+            a = Attributes()
+            x11.XGetWindowAttributes(dpy, target, ctypes.byref(a))
+            shot_size = (a.width, a.height)
+        img = x11.XGetImage(dpy, target, 0, 0, shot_size[0], shot_size[1], 0xFFFFFFFF, 2)  # ZPixmap
         if not img:
             return 'error XGetImage failed'
         im = img.contents
