@@ -15,7 +15,14 @@ import path from 'node:path';
 const ROOT = path.resolve(import.meta.dirname, '../..');
 const PAGES = path.join(import.meta.dirname, 'pages');
 const PORT = 8770;
-const ARGS = Object.fromEntries(process.argv.slice(2).reduce((acc, a, i, all) => (a.startsWith('--') ? [...acc, [a.slice(2), all[i + 1]]] : acc), []));
+const ARGS = Object.fromEntries(
+  process.argv
+    .slice(2)
+    .reduce(
+      (acc, a, i, all) => (a.startsWith('--') ? [...acc, [a.slice(2), all[i + 1]]] : acc),
+      [],
+    ),
+);
 const WANTED = (ARGS.browsers ?? 'webswitch,firefox,chrome').split(',');
 const RUNS = { startup: 3, tabs: 2, js: 2 };
 const SETTLE_MS = 8000;
@@ -66,7 +73,13 @@ const BROWSERS = {
     prepare: (profile) => fs.mkdirSync(profile, { recursive: true }),
     command: (profile, urls) => ({
       cmd: 'google-chrome-stable',
-      args: ['--user-data-dir=' + profile, '--no-first-run', '--no-default-browser-check', '--ozone-platform-hint=auto', ...urls],
+      args: [
+        '--user-data-dir=' + profile,
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--ozone-platform-hint=auto',
+        ...urls,
+      ],
       env: {},
     }),
   },
@@ -81,7 +94,9 @@ http
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     const id = url.searchParams.get('id');
     events.push({ path: url.pathname, id, t });
-    const page = { '/page': 'page.html', '/heavy': 'heavy.html', '/bench': 'bench.html' }[url.pathname];
+    const page = { '/page': 'page.html', '/heavy': 'heavy.html', '/bench': 'bench.html' }[
+      url.pathname
+    ];
     if (page) {
       res.writeHead(200, { 'content-type': 'text/html', 'cache-control': 'no-store' });
       res.end(fs.readFileSync(path.join(PAGES, page)));
@@ -120,7 +135,9 @@ function pidsInSession(sid) {
 }
 function pssKb(pid) {
   try {
-    return Number(/^Pss:\s+(\d+) kB/m.exec(fs.readFileSync(`/proc/${pid}/smaps_rollup`, 'utf8'))?.[1] ?? 0);
+    return Number(
+      /^Pss:\s+(\d+) kB/m.exec(fs.readFileSync(`/proc/${pid}/smaps_rollup`, 'utf8'))?.[1] ?? 0,
+    );
   } catch {
     return 0;
   }
@@ -136,7 +153,11 @@ function cpuTicks(pid) {
 }
 function sample(sid) {
   const pids = pidsInSession(sid);
-  return { pids, pssMb: pids.reduce((sum, pid) => sum + pssKb(pid), 0) / 1024, ticks: new Map(pids.map((pid) => [pid, cpuTicks(pid)])) };
+  return {
+    pids,
+    pssMb: pids.reduce((sum, pid) => sum + pssKb(pid), 0) / 1024,
+    ticks: new Map(pids.map((pid) => [pid, cpuTicks(pid)])),
+  };
 }
 async function stop(sid) {
   for (let i = 0; i < 40 && pidsInSession(sid).length > 0; i++) {
@@ -151,7 +172,11 @@ async function stop(sid) {
 }
 function start(browser, profile, urls) {
   const { cmd, args, env } = browser.command(profile, urls);
-  const child = spawn(cmd, args, { detached: true, stdio: 'ignore', env: { ...process.env, ...env } });
+  const child = spawn(cmd, args, {
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env, ...env },
+  });
   child.unref();
   return child.pid;
 }
@@ -163,8 +188,13 @@ async function measureIdle(sid) {
   await sleep(WINDOW_MS);
   const after = sample(sid);
   let ticks = 0;
-  for (const [pid, t] of after.ticks) if (before.ticks.has(pid)) ticks += t - (before.ticks.get(pid) ?? 0);
-  return { memoryMb: Math.round(after.pssMb), processes: after.pids.length, idleCpuPercent: Math.round((ticks / 100 / (WINDOW_MS / 1000)) * 1000) / 10 };
+  for (const [pid, t] of after.ticks)
+    if (before.ticks.has(pid)) ticks += t - (before.ticks.get(pid) ?? 0);
+  return {
+    memoryMb: Math.round(after.pssMb),
+    processes: after.pids.length,
+    idleCpuPercent: Math.round((ticks / 100 / (WINDOW_MS / 1000)) * 1000) / 10,
+  };
 }
 
 async function startupRun(name, browser, profile, run) {
@@ -184,7 +214,11 @@ async function startupRun(name, browser, profile, run) {
 
 async function tabsRun(name, browser, profile, run) {
   const ids = Array.from({ length: TABS }, (_, i) => `${name}-b-${run}-${i}`);
-  const sid = start(browser, profile, ids.map((id) => url('/heavy', id)));
+  const sid = start(
+    browser,
+    profile,
+    ids.map((id) => url('/heavy', id)),
+  );
   const ok = await waitFor(() => ids.every((id) => seen('/loaded', id)), 90000);
   if (!ok) {
     await stop(sid);
@@ -234,14 +268,27 @@ for (const name of WANTED) {
     if (result) js.push(result);
   }
 
-  const m = (rows, key) => (rows.length ? Math.round(median(rows.map((r) => r[key])) * 10) / 10 : null);
+  const m = (rows, key) =>
+    rows.length ? Math.round(median(rows.map((r) => r[key])) * 10) / 10 : null;
   const suiteNames = js[0] ? Object.keys(js[0].results) : [];
   summary[name] = {
     label: browser.label,
     startup: { firstRequestMs: m(startup, 'firstRequestMs'), loadedMs: m(startup, 'loadedMs') },
-    oneTab: { memoryMb: m(startup, 'memoryMb'), processes: m(startup, 'processes'), idleCpuPercent: m(startup, 'idleCpuPercent') },
-    fiveTabs: { memoryMb: m(tabs, 'memoryMb'), processes: m(tabs, 'processes'), idleCpuPercent: m(tabs, 'idleCpuPercent') },
-    js: { total: js.length ? median(js.map((r) => r.total)) : null, tests: Object.fromEntries(suiteNames.map((t) => [t, median(js.map((r) => r.results[t]))])), agent: js[0]?.agent },
+    oneTab: {
+      memoryMb: m(startup, 'memoryMb'),
+      processes: m(startup, 'processes'),
+      idleCpuPercent: m(startup, 'idleCpuPercent'),
+    },
+    fiveTabs: {
+      memoryMb: m(tabs, 'memoryMb'),
+      processes: m(tabs, 'processes'),
+      idleCpuPercent: m(tabs, 'idleCpuPercent'),
+    },
+    js: {
+      total: js.length ? median(js.map((r) => r.total)) : null,
+      tests: Object.fromEntries(suiteNames.map((t) => [t, median(js.map((r) => r.results[t]))])),
+      agent: js[0]?.agent,
+    },
   };
   fs.rmSync(profile, { recursive: true, force: true });
 }

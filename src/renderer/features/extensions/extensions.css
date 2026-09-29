@@ -348,3 +348,26 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
+
+.store-install {
+  flex: none;
+  margin-left: var(--space-3);
+  padding: 0 var(--space-2);
+  border: var(--border-width) solid var(--color-accent);
+  color: var(--color-accent);
+  font-size: calc(var(--font-size) - 1px);
+  white-space: nowrap;
+}
+
+.store-install[hidden] {
+  display: none;
+}
+
+.store-install:hover:not(:disabled) {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
+.store-install:disabled {
+  opacity: 0.6;
+}

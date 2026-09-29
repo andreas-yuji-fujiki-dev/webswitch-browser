@@ -19,6 +19,7 @@ import { migrateLegacyData } from './legacy-migration';
 import { cacheDir, configDir, dataDir, distDir } from './paths';
 import { openPopupWindow } from './popup-window';
 import { BROWSERS } from '~shared/browsers-catalog';
+import { WEB_STORE_URL } from '~shared/crx';
 import type { BrowserId } from '~types/browsers';
 import type { RequestVerdict } from '~types/extensions';
 import type { DrmBrowser } from '~types/drm';
@@ -50,6 +51,9 @@ import { registerThemesIpc } from '../features/themes/themes.ipc';
 import { ThemesService } from '../features/themes/themes.service';
 import { registerBrowsersIpc } from '../features/browsers/browsers.ipc';
 import { anyBrowserInstalled, BrowsersService } from '../features/browsers/browsers.service';
+import { registerBookmarksIpc } from '../features/bookmarks/bookmarks.ipc';
+import { BookmarksService } from '../features/bookmarks/bookmarks.service';
+import { BookmarksPopup } from './bookmarks-popup';
 import { registerCookiesIpc } from '../features/cookies/cookies.ipc';
 import { CookiesService } from '../features/cookies/cookies.service';
 import { DrmService } from '../features/drm/drm.service';
@@ -131,6 +135,20 @@ async function start(
     color(themes.resolved().colors.bg),
     uiView,
   );
+  // The star's edit form and a bookmarks-bar folder's contents: a real Gtk.Popover (see
+  // bookmarks-popup.ts for why), over a fresh related view each time so it always starts clean.
+  const bookmarksPopup = new BookmarksPopup(
+    uiView,
+    () =>
+      createUiView(
+        { session: uiSession, router, preload },
+        color(themes.resolved().colors.bg),
+        uiView,
+      ),
+    (view) => {
+      router.untrack(view);
+    },
+  );
 
   const main = new MainWindow(app, uiView);
   let uiInspectorTab: number | null = null;
@@ -167,6 +185,7 @@ async function start(
 
   const keybindings = new KeybindingsService();
   const history = new HistoryService();
+  const bookmarks = new BookmarksService();
   const userCss = new UserCssService();
   const account = new AccountService(session);
   const browsers = new BrowsersService(
@@ -343,6 +362,9 @@ async function start(
       openHistory: () => {
         tabs.openPage('history');
       },
+      bookmarkPage: () => {
+        router.emit(IPC_CHANNELS.bookmarks.shortcut, null);
+      },
       focusAddressBar,
       reload: () => {
         navigation.reload();
@@ -384,6 +406,33 @@ async function start(
   registerMenuIpc(router, menu);
   registerKeybindingsIpc(router, keybindings, shortcuts);
   registerHistoryIpc(router, history);
+  registerBookmarksIpc(router, bookmarks);
+  router.handle(IPC_CHANNELS.bookmarks.openPopup, (kind, itemId, x, y, width, height) => {
+    const query =
+      itemId !== null && (kind === 'folder' || kind === 'folder-menu' || kind === 'bookmark')
+        ? `kind=${kind}&id=${encodeURIComponent(itemId)}`
+        : `kind=${kind}`;
+    const size = {
+      folder: { width: 240, height: 320 },
+      // Sized for the add-bookmark form (the bigger of the three it can switch to in place: its
+      // own rename fields, "Add bookmark here…", or "Add folder here…"), so switching never
+      // needs the popover itself to resize.
+      'folder-menu': { width: 300, height: 300 },
+      bookmark: { width: 300, height: 280 },
+      star: { width: 300, height: 280 },
+      // Sized for the add-bookmark form (the bigger of the two it can switch to in place), so
+      // switching from the menu to either form never needs the popover itself to resize.
+      'add-menu': { width: 300, height: 300 },
+    }[kind];
+    bookmarksPopup.open(
+      `${UI_SCHEME}://${UI_HOST}/index.html?view=bookmarks-popup&${query}`,
+      { x, y, width, height },
+      size,
+    );
+  });
+  router.handle(IPC_CHANNELS.bookmarks.closePopup, () => {
+    bookmarksPopup.close();
+  });
   registerBrowsersIpc(router, browsers, (id) => {
     menu.close();
     if (!BROWSERS.some((browser) => browser.id === id))
@@ -423,8 +472,14 @@ async function start(
     menuView.set_background_color(background);
     devtoolsPanel.setBackground(background);
   });
-  registerExtensionsIpc(router, extensions, extensionRuntime, () =>
-    chooseFolder(main.window, 'Choose the folder of an unpacked extension'),
+  registerExtensionsIpc(
+    router,
+    extensions,
+    extensionRuntime,
+    () => chooseFolder(main.window, 'Choose the folder of an unpacked extension'),
+    () => {
+      tabs.createTab(WEB_STORE_URL);
+    },
   );
   registerDevToolsIpc(router, devtools);
   registerSettingsIpc(router, settings, () => {
@@ -493,6 +548,7 @@ async function start(
     userCss.init(),
     keybindings.init(),
     history.init(),
+    bookmarks.init(),
     account.init(),
     cookies.init(),
   ]);
@@ -527,6 +583,8 @@ async function start(
     shortcuts,
     keybindings,
     history,
+    bookmarks,
+    bookmarksPopup,
     userCss,
     account,
     cookies,

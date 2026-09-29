@@ -36,6 +36,18 @@ export interface TabState {
   error: TabError | null;
   /** Set when the tab shows a built-in page. The UI draws it in the page area. */
   page: InternalPage | null;
+  /** Set while this tab is on one extension's own page on the real Chrome Web Store, so the UI can
+   * offer to install it directly instead of the store's own "Add to Chrome" button, which has
+   * nothing to talk to in a non-Chrome browser. */
+  storeId: string | null;
+  /** Pinned tabs are kept first in the strip (see `TabsService.setPinned`/`reorderTabs`) and drawn
+   * as a narrow, icon-only tile. */
+  pinned: boolean;
+  /** Mirrors the tab's own `WebKit.WebView.is_muted`; set with `tabs:set-muted`. */
+  muted: boolean;
+  /** Mirrors `WebKit.WebView.is_playing_audio` -- whether to show the mute control at all (Chrome's
+   * own rule: only while a tab is audible or already muted, not on every tab). */
+  playingAudio: boolean;
 }
 
 export interface TabsState {
@@ -55,6 +67,9 @@ export interface Tab {
   zoomIndex: number;
   /** Set while a Chromium window is embedded over this tab (DRM sites, experimental). */
   embed: TabEmbed | null;
+  /** See `TabState.pinned`. Kept here (not derived), since only `setPinned`/`reorderTabs` may
+   * change it -- unlike `muted`, which is just read straight off `view.is_muted` on every snapshot. */
+  pinned: boolean;
 }
 
 /** What the tab shows while a Chromium window is embedded in it. */

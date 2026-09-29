@@ -10,6 +10,8 @@ export function registerExtensionsIpc(
   runtime: ExtensionRuntime,
   /** Asks for a folder and returns its path (null when the user cancels). */
   chooseFolder: () => Promise<string | null>,
+  /** Opens the real Chrome Web Store in a new tab. */
+  openStore: () => void,
 ): void {
   router.handle(IPC_CHANNELS.extensions.get, () => service.getState());
   router.handle(IPC_CHANNELS.extensions.prepareStore, (input) => service.prepareFromStore(input));
@@ -32,6 +34,9 @@ export function registerExtensionsIpc(
   });
   router.handle(IPC_CHANNELS.extensions.openOptions, (id) => {
     runtime.openOptions(id);
+  });
+  router.handle(IPC_CHANNELS.extensions.openStore, () => {
+    openStore();
   });
 
   service.onChanged((state) => {

@@ -123,3 +123,20 @@ export function extensionIdFromInput(input: string): string | null {
   const found = /(?:^|[/=])([a-p]{32})(?:[/?#&]|$)/.exec(text);
   return found?.[1] ?? null;
 }
+
+/** The address a "Search the Chrome Web Store" button opens. */
+export const WEB_STORE_URL = 'https://chromewebstore.google.com/';
+
+/**
+ * The extension id, only when `url` is one particular extension's own page on the real Chrome Web
+ * Store (`chromewebstore.google.com/detail/...` or the older `chrome.google.com/webstore/detail/...`)
+ * — never a bare id-looking string elsewhere, which `extensionIdFromInput` alone would also match.
+ * Used to offer a native "Install in Webswitch" affordance while browsing the store for real,
+ * instead of relying on the store's own "Add to Chrome" button, which has nothing to talk to here.
+ */
+export function webStoreDetailId(url: string): string | null {
+  const found =
+    /^https:\/\/chromewebstore\.google\.com\/detail\/[^/?#]+\/([a-p]{32})(?:[/?#]|$)/.exec(url) ??
+    /^https:\/\/chrome\.google\.com\/webstore\/detail\/[^/?#]+\/([a-p]{32})(?:[/?#]|$)/.exec(url);
+  return found?.[1] ?? null;
+}

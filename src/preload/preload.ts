@@ -46,6 +46,9 @@ const browserApi: BrowserApi = {
     activate: (tabId) => invoke(IPC_CHANNELS.tabs.activate, tabId),
     setChromeHeight: (heightPx) => invoke(IPC_CHANNELS.tabs.setChromeHeight, heightPx),
     openHttpStatus: (status) => invoke(IPC_CHANNELS.tabs.openHttpStatus, status),
+    setPinned: (tabId, pinned) => invoke(IPC_CHANNELS.tabs.setPinned, tabId, pinned),
+    setMuted: (tabId, muted) => invoke(IPC_CHANNELS.tabs.setMuted, tabId, muted),
+    reorder: (order) => invoke(IPC_CHANNELS.tabs.reorder, order),
     onStateChanged: (listener) => subscribe(IPC_CHANNELS.tabs.stateChanged, listener),
   },
   navigation: {
@@ -83,6 +86,24 @@ const browserApi: BrowserApi = {
         listener();
       }),
   },
+  bookmarks: {
+    get: () => invoke(IPC_CHANNELS.bookmarks.get),
+    add: (url, title, folderId) => invoke(IPC_CHANNELS.bookmarks.add, url, title, folderId),
+    update: (id, changes) => invoke(IPC_CHANNELS.bookmarks.update, id, changes),
+    remove: (id) => invoke(IPC_CHANNELS.bookmarks.remove, id),
+    addFolder: (title, parentId) => invoke(IPC_CHANNELS.bookmarks.addFolder, title, parentId),
+    renameFolder: (id, title) => invoke(IPC_CHANNELS.bookmarks.renameFolder, id, title),
+    removeFolder: (id) => invoke(IPC_CHANNELS.bookmarks.removeFolder, id),
+    reorderBar: (order) => invoke(IPC_CHANNELS.bookmarks.reorderBar, order),
+    openPopup: (kind, itemId, x, y, width, height) =>
+      invoke(IPC_CHANNELS.bookmarks.openPopup, kind, itemId, x, y, width, height),
+    closePopup: () => invoke(IPC_CHANNELS.bookmarks.closePopup),
+    onShortcut: (listener) =>
+      subscribe(IPC_CHANNELS.bookmarks.shortcut, () => {
+        listener();
+      }),
+    onChanged: (listener) => subscribe(IPC_CHANNELS.bookmarks.changed, listener),
+  },
   cookies: {
     get: () => invoke(IPC_CHANNELS.cookies.get),
     summary: () => invoke(IPC_CHANNELS.cookies.summary),
@@ -116,6 +137,7 @@ const browserApi: BrowserApi = {
     openPopup: (id, x, y, width, height) =>
       invoke(IPC_CHANNELS.extensions.openPopup, id, x, y, width, height),
     openOptions: (id) => invoke(IPC_CHANNELS.extensions.openOptions, id),
+    openStore: () => invoke(IPC_CHANNELS.extensions.openStore),
     clearProxy: () => invoke(IPC_CHANNELS.extensions.clearProxy),
     onChanged: (listener) => subscribe(IPC_CHANNELS.extensions.changed, listener),
   },

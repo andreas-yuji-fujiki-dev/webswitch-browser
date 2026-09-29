@@ -1,4 +1,12 @@
 import type { AccountState } from './account';
+import type {
+  Bookmark,
+  BookmarkChanges,
+  BookmarkFolder,
+  BookmarkOrderEntry,
+  BookmarkPopupKind,
+  BookmarksState,
+} from './bookmarks';
 import type { CookiePolicy, CookiesState, CookiesSummary } from './cookies';
 import type { HistoryEntry } from './history';
 import type { BrowserId, BrowserResult, BrowsersState } from './browsers';
@@ -29,6 +37,11 @@ export interface BrowserApi {
     setChromeHeight: (heightPx: number) => Promise<void>;
     /** Opens MDN's page for an HTTP status in a new tab, for the "see more" button on a load error. */
     openHttpStatus: (status: number) => Promise<void>;
+    /** Pinned tabs are kept first in the strip and drawn as a narrow, icon-only tile. */
+    setPinned: (tabId: number, pinned: boolean) => Promise<void>;
+    setMuted: (tabId: number, muted: boolean) => Promise<void>;
+    /** A full new order for the strip, from a drag; the native side still keeps pinned tabs first. */
+    reorder: (order: number[]) => Promise<void>;
     onStateChanged: (listener: (state: TabsState) => void) => Unsubscribe;
   };
   navigation: {
@@ -64,6 +77,38 @@ export interface BrowserApi {
     remove: (visitedAt: number) => Promise<void>;
     clear: () => Promise<void>;
     onChanged: (listener: () => void) => Unsubscribe;
+  };
+  bookmarks: {
+    get: () => Promise<BookmarksState>;
+    /** Adds a bookmark; adding a URL that is already bookmarked updates it instead. */
+    add: (url: string, title: string, folderId: string | null) => Promise<Bookmark>;
+    update: (id: string, changes: BookmarkChanges) => Promise<void>;
+    remove: (id: string) => Promise<void>;
+    /** `parentId` nests it inside another folder; `null` puts it directly in the bar. */
+    addFolder: (title: string, parentId: string | null) => Promise<BookmarkFolder>;
+    renameFolder: (id: string, title: string) => Promise<void>;
+    /** Also removes every bookmark and sub-folder inside it. */
+    removeFolder: (id: string) => Promise<void>;
+    /** A full new order for the bar's top-level items, after a drag-and-drop. */
+    reorderBar: (order: BookmarkOrderEntry[]) => Promise<void>;
+    /**
+     * Opens one of the bookmarks popovers at this place: the star's add/edit form (`star`), one
+     * specific bookmark's edit form (`bookmark`, a bar item's right-click), a folder's contents
+     * (`folder`, left click) or its rename/delete form (`folder-menu`, right-click). `itemId` is
+     * the bookmark or folder id `bookmark`/`folder`/`folder-menu` act on; ignored for `star`.
+     */
+    openPopup: (
+      kind: BookmarkPopupKind,
+      itemId: string | null,
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+    ) => Promise<void>;
+    closePopup: () => Promise<void>;
+    /** Ctrl+D: the same as clicking the star. */
+    onShortcut: (listener: () => void) => Unsubscribe;
+    onChanged: (listener: (state: BookmarksState) => void) => Unsubscribe;
   };
   cookies: {
     get: () => Promise<CookiesState>;
@@ -108,6 +153,8 @@ export interface BrowserApi {
     /** Opens the extension's popup under the toolbar button at this place (window coordinates). */
     openPopup: (id: string, x: number, y: number, width: number, height: number) => Promise<void>;
     openOptions: (id: string) => Promise<void>;
+    /** Opens the real Chrome Web Store in a new tab, to search and browse for extensions. */
+    openStore: () => Promise<void>;
     /** Stops the proxy an extension set: the system's settings come back. */
     clearProxy: () => Promise<void>;
     onChanged: (listener: (state: ExtensionsState) => void) => Unsubscribe;

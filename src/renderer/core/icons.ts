@@ -30,6 +30,21 @@ const PATHS = {
     'M2.5 4.5h2M7.5 4.5h6M2.5 11.5h6M11.5 11.5h2M6 3a1.5 1.5 0 1 0 0 3 1.5 1.5 0 1 0 0-3ZM10 10a1.5 1.5 0 1 0 0 3 1.5 1.5 0 1 0 0-3Z',
   puzzle: 'M2.5 5h3a1.6 1.6 0 1 1 3.2 0H11v3.3a1.6 1.6 0 1 1 0 3.2V14H2.5Z',
   keyboard: 'M2 4.5h12v7H2ZM4.5 7h.01M7.5 7h.01M10.5 7h.01M5 9.5h6',
+  star: 'M8 1.33 10.06 5.51 14.67 6.18 11.33 9.43 12.12 14 8 11.85 3.88 14 4.67 9.43 1.33 6.18 5.94 5.51Z',
+  // A flat, angular tab-folder silhouette: only straight segments, no rounded corners, to match
+  // the rest of the design language ("no border-radius, sharp boxed" -- CLAUDE.md's design
+  // section); drawn filled with the theme's accent color, not stroked like the other line icons.
+  folder: 'M1.5 4.5H6L7.2 6H14.5V12.5H1.5Z',
+  // A flat pushpin: a rectangular head narrowing straight down to a point, same angular treatment
+  // as the folder icon above and drawn filled (accent color) when the tab is pinned, stroked and
+  // muted otherwise -- the same filled/stroked toggle the bookmark star already uses for its own
+  // on/off state.
+  pin: 'M5 3H11V7H9V10L7 13V10H5V7H5.7L5 6.3V3Z',
+  // A speaker cone (two subpaths in one line icon, like the rest of this stroked set): plain sound
+  // waves when a tab is audible, or a diagonal cross when it is muted -- swapped by `tab-bar.ts`
+  // depending on `TabState.muted`, never shown together.
+  volume: 'M2 6H4.5L8 3.5V12.5L4.5 10H2Z M10.3 6.2a3 3 0 0 1 0 3.6',
+  muted: 'M2 6H4.5L8 3.5V12.5L4.5 10H2Z M10 6L13 9M13 6L10 9',
 };
 
 // Three filled dots instead of strokes.

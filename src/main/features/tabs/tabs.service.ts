@@ -4,6 +4,7 @@ import type Gtk from 'gi://Gtk?version=4.0';
 import WebKit from 'gi://WebKit?version=6.0';
 import { debug } from '../../core/debug';
 import { isWebUrl, parseUrl } from '../../core/url';
+import { webStoreDetailId } from '~shared/crx';
 import type { EmbedSpec } from '~types/browsers';
 import type { Unsubscribe } from '~types/common';
 import type { TabBrief } from '~types/extensions';
@@ -96,6 +97,7 @@ export class TabsService {
       page: options.page ?? null,
       zoomIndex: DEFAULT_ZOOM_INDEX,
       embed: null,
+      pinned: false,
     };
     this.tabs.set(tab.id, tab);
     this.deps.stack.add_named(view, String(tab.id));
@@ -234,6 +236,50 @@ export class TabsService {
   reopenClosedTab(): void {
     const url = this.closedUrls.pop();
     if (url !== undefined) this.createTab(url);
+  }
+
+  /** Pinning or unpinning moves the tab to the boundary between the two groups -- the last pinned
+   * position when pinning, the first unpinned position when unpinning -- the same spot either way,
+   * matching Chrome: a tab does not keep its old position once its group changes. */
+  setPinned(id: number, pinned: boolean): void {
+    const tab = this.tabs.get(id);
+    if (!tab || tab.pinned === pinned) return;
+    tab.pinned = pinned;
+    const rest = [...this.tabs.keys()].filter((tabId) => tabId !== id);
+    const boundary = rest.filter((tabId) => this.tabs.get(tabId)?.pinned === true).length;
+    rest.splice(boundary, 0, id);
+    this.reorderMap(rest);
+    this.scheduleNotify();
+  }
+
+  setMuted(id: number, muted: boolean): void {
+    const tab = this.tabs.get(id);
+    if (tab) tab.view.is_muted = muted;
+  }
+
+  /** A full new order from a drag in the tab strip. Pinned tabs are still grouped first regardless
+   * of what the UI sends -- `TabsService` stays the single source of truth for that rule (CLAUDE.md
+   * §5), not just a convention the renderer is trusted to keep. */
+  reorderTabs(order: number[]): void {
+    const known = new Set(this.tabs.keys());
+    const wanted = order.filter((id) => known.has(id));
+    // Anything the caller left out (should not normally happen) keeps its relative place at the end.
+    for (const id of this.tabs.keys()) if (!wanted.includes(id)) wanted.push(id);
+    const pinned = wanted.filter((id) => this.tabs.get(id)?.pinned === true);
+    const unpinned = wanted.filter((id) => this.tabs.get(id)?.pinned !== true);
+    this.reorderMap([...pinned, ...unpinned]);
+    this.scheduleNotify();
+  }
+
+  /** `tabs` is a `Map`, so its iteration order *is* the strip's order; reordering means rebuilding
+   * it in the new order, not sorting an array kept elsewhere. */
+  private reorderMap(order: number[]): void {
+    const byId = new Map(this.tabs);
+    this.tabs.clear();
+    for (const id of order) {
+      const tab = byId.get(id);
+      if (tab) this.tabs.set(id, tab);
+    }
   }
 
   /** 1-based position in the tab strip. Out-of-range positions are ignored. */
@@ -421,6 +467,8 @@ export class TabsService {
     view.connect('notify::title', changed);
     view.connect('notify::uri', changed);
     view.connect('notify::is-loading', changed);
+    view.connect('notify::is-muted', changed);
+    view.connect('notify::is-playing-audio', changed);
     view.get_back_forward_list().connect('changed', changed);
 
     view.connect('load-changed', (_view, event) => {
@@ -570,6 +618,10 @@ export class TabsService {
         canGoForward: false,
         error: null,
         page: tab.page,
+        storeId: null,
+        pinned: tab.pinned,
+        muted: tab.view.is_muted,
+        playingAudio: tab.view.is_playing_audio,
       };
     }
     if (tab.embed) {
@@ -582,6 +634,12 @@ export class TabsService {
         canGoForward: false,
         error: null,
         page: null,
+        storeId: null,
+        pinned: tab.pinned,
+        // The embedded Chromium plays its own audio, outside WebKit's own view -- nothing here to
+        // mirror or control, so the mute button never shows on an embedded tab.
+        muted: false,
+        playingAudio: false,
       };
     }
     const view = tab.view;
@@ -595,6 +653,10 @@ export class TabsService {
       canGoForward: view.can_go_forward(),
       error: tab.error,
       page: null,
+      storeId: tab.error ? null : webStoreDetailId(url),
+      pinned: tab.pinned,
+      muted: view.is_muted,
+      playingAudio: view.is_playing_audio,
     };
   }
 

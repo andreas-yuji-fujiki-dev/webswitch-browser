@@ -28,11 +28,24 @@ export class IpcRouter {
   }
 
   /**
-   * A second UI view that shares the first one's web process and script bridge (the menu): it
-   * needs no handler of its own, only to receive events.
+   * A second UI view that shares the first one's web process and script bridge (the menu, or a
+   * transient popover like the bookmarks star's): it needs no handler of its own, only to
+   * receive events.
    */
   track(view: WebKit.WebView): void {
     this.views.add(view);
+  }
+
+  /**
+   * For a `track`ed view that is about to be disposed (unlike the menu view, kept for the whole
+   * run, a popover view is created and torn down each time it opens): without this, `emit` kept
+   * calling `evaluate_javascript` on the dangling reference forever after, which is not just a
+   * harmless "already disposed" warning -- left unfixed, it reliably crashed the process (found
+   * from a real SIGSEGV at shutdown in the self-test, after the bookmarks popover's own view had
+   * been disposed while still tracked here).
+   */
+  untrack(view: WebKit.WebView): void {
+    this.views.delete(view);
   }
 
   handle<C extends InvokeChannel>(

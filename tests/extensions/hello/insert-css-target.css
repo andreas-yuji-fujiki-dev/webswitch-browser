@@ -1,0 +1,8 @@
+/* Fixture for chrome.scripting.insertCSS({ files: [...] }): a root-relative url(), which must
+   resolve against the extension's own origin (not the page's, the real bug found and fixed
+   2026-09-29), and a fragment-only url(#id), which must be left alone (it names an SVG element
+   in the page's own document, e.g. an SVG filter, not a file of the extension's). */
+.ws-insert-css-test {
+  background-image: url(/fonts/fake.ttf);
+  filter: url(#ws-fragment-only);
+}

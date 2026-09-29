@@ -1,5 +1,13 @@
 import type { IPC_CHANNELS } from '~shared/ipc-channels';
 import type { AccountState } from './account';
+import type {
+  Bookmark,
+  BookmarkChanges,
+  BookmarkFolder,
+  BookmarkOrderEntry,
+  BookmarkPopupKind,
+  BookmarksState,
+} from './bookmarks';
 import type { CookiePolicy, CookiesState, CookiesSummary } from './cookies';
 import type { HistoryEntry } from './history';
 import type { BrowserId, BrowserResult, BrowsersState } from './browsers';
@@ -26,6 +34,11 @@ export interface IpcInvokeMap {
   [IPC_CHANNELS.tabs.activate]: { args: [tabId: number]; result: void };
   [IPC_CHANNELS.tabs.setChromeHeight]: { args: [heightPx: number]; result: void };
   [IPC_CHANNELS.tabs.openHttpStatus]: { args: [status: number]; result: void };
+  [IPC_CHANNELS.tabs.setPinned]: { args: [tabId: number, pinned: boolean]; result: void };
+  [IPC_CHANNELS.tabs.setMuted]: { args: [tabId: number, muted: boolean]; result: void };
+  /** The strip's new order, every tab id once; the native side still groups pinned tabs first
+   * regardless of what is sent (it stays the single source of truth for that rule). */
+  [IPC_CHANNELS.tabs.reorder]: { args: [order: number[]]; result: void };
   [IPC_CHANNELS.ui.setTitleBarLayout]: {
     args: [dragStartX: number, heightPx: number];
     result: void;
@@ -42,6 +55,32 @@ export interface IpcInvokeMap {
   [IPC_CHANNELS.history.query]: { args: [search: string, limit: number]; result: HistoryEntry[] };
   [IPC_CHANNELS.history.remove]: { args: [visitedAt: number]; result: void };
   [IPC_CHANNELS.history.clear]: { args: []; result: void };
+  [IPC_CHANNELS.bookmarks.get]: { args: []; result: BookmarksState };
+  [IPC_CHANNELS.bookmarks.add]: {
+    args: [url: string, title: string, folderId: string | null];
+    result: Bookmark;
+  };
+  [IPC_CHANNELS.bookmarks.update]: { args: [id: string, changes: BookmarkChanges]; result: void };
+  [IPC_CHANNELS.bookmarks.remove]: { args: [id: string]; result: void };
+  [IPC_CHANNELS.bookmarks.addFolder]: {
+    args: [title: string, parentId: string | null];
+    result: BookmarkFolder;
+  };
+  [IPC_CHANNELS.bookmarks.renameFolder]: { args: [id: string, title: string]; result: void };
+  [IPC_CHANNELS.bookmarks.removeFolder]: { args: [id: string]; result: void };
+  [IPC_CHANNELS.bookmarks.reorderBar]: { args: [order: BookmarkOrderEntry[]]; result: void };
+  [IPC_CHANNELS.bookmarks.openPopup]: {
+    args: [
+      kind: BookmarkPopupKind,
+      itemId: string | null,
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+    ];
+    result: void;
+  };
+  [IPC_CHANNELS.bookmarks.closePopup]: { args: []; result: void };
   [IPC_CHANNELS.cookies.get]: { args: []; result: CookiesState };
   [IPC_CHANNELS.cookies.summary]: { args: []; result: CookiesSummary };
   [IPC_CHANNELS.cookies.remove]: { args: [ids: string[]]; result: void };
@@ -83,6 +122,7 @@ export interface IpcInvokeMap {
     result: void;
   };
   [IPC_CHANNELS.extensions.openOptions]: { args: [id: string]; result: void };
+  [IPC_CHANNELS.extensions.openStore]: { args: []; result: void };
   [IPC_CHANNELS.extensions.clearProxy]: { args: []; result: void };
   [IPC_CHANNELS.browsers.get]: { args: []; result: BrowsersState };
   [IPC_CHANNELS.browsers.check]: { args: []; result: BrowserResult };
@@ -129,6 +169,8 @@ export interface IpcEventMap {
   [IPC_CHANNELS.ui.windowControls]: WindowControlsState;
   [IPC_CHANNELS.menu.stateChanged]: MenuState;
   [IPC_CHANNELS.account.changed]: AccountState;
+  [IPC_CHANNELS.bookmarks.changed]: BookmarksState;
+  [IPC_CHANNELS.bookmarks.shortcut]: null;
   [IPC_CHANNELS.history.changed]: null;
   [IPC_CHANNELS.cookies.changed]: null;
   [IPC_CHANNELS.keybindings.changed]: KeybindingsState;

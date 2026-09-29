@@ -23,7 +23,8 @@
     "browsingData",
     "sessions",
     "offscreen",
-    "history"
+    "history",
+    "pageCapture"
   ],
   "host_permissions": ["*://localhost/*", "*://127.0.0.1/*"],
   "background": {

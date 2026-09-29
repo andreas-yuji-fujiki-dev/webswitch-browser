@@ -38,6 +38,7 @@ const SUPPORTED = new Set<string>([
   'clipboardRead',
   'tabGroups',
   'sidePanel',
+  'pageCapture',
 ]);
 
 /** Permissions that are accepted and do nothing. */
@@ -63,7 +64,6 @@ const IGNORED = new Set<string>([
 /** Permissions that cannot work in WebKit, and why it matters. */
 const UNSUPPORTED = new Set<string>([
   'debugger',
-  'pageCapture',
   'tabCapture',
   'desktopCapture',
   'enterprise.platformKeys',
@@ -88,6 +88,7 @@ const RISKS: Record<string, string> = {
   identity: 'Can open sign-in windows for other services.',
   declarativeNetRequest: 'Can block or redirect requests.',
   clipboardRead: 'Can read what you copied.',
+  pageCapture: 'Can save a complete copy of any page you have open.',
 };
 
 const MAX_NAME = 120;

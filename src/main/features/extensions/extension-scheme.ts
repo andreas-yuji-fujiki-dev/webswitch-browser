@@ -4,7 +4,7 @@ import WebKit from 'gi://WebKit?version=6.0';
 import { matchesAny } from '~shared/match-pattern';
 import { EXTENSION_SCHEME } from '../../core/config';
 import { debug } from '../../core/debug';
-import type { ExtensionRuntime } from './extension-runtime';
+import { prepareExtensionCss, type ExtensionRuntime } from './extension-runtime';
 
 const CONTENT_TYPES: Record<string, string> = {
   html: 'text/html',
@@ -89,7 +89,27 @@ export function registerExtensionScheme(runtime: ExtensionRuntime): void {
       return;
     }
     const extensionName = file.get_basename()?.split('.').pop()?.toLowerCase() ?? '';
-    request.finish(file.read(null), -1, CONTENT_TYPES[extensionName] ?? 'application/octet-stream');
+    const contentType = CONTENT_TYPES[extensionName] ?? 'application/octet-stream';
+    // Chrome substitutes __MSG_@@extension_id__ in a CSS file's own text for the running
+    // extension's id, so a stylesheet can reference the extension's own files (fonts, images)
+    // without a build step baking the id in. Real value, e.g. Responsive Viewer's fonts: without
+    // this the placeholder stays literal, in a scheme (chrome-extension:) Webswitch does not even
+    // serve, and WebKit refuses it outright as insecure mixed content. `prepareExtensionCss` also
+    // rewrites relative url()s to an absolute address, a no-op here (this file is already being
+    // served from that same address) but shared with the two other places CSS text like this gets
+    // used (content_scripts' css and chrome.scripting.insertCSS's files, extension-runtime.ts).
+    if (contentType === 'text/css') {
+      const [, bytes] = file.load_contents(null);
+      const css = prepareExtensionCss(
+        new TextDecoder().decode(bytes),
+        extension.summary.id,
+        relative,
+      );
+      const out = new GLib.Bytes(new TextEncoder().encode(css));
+      request.finish(Gio.MemoryInputStream.new_from_bytes(out), out.get_size(), contentType);
+      return;
+    }
+    request.finish(file.read(null), -1, contentType);
   });
 }
 

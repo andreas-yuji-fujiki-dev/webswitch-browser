@@ -3,6 +3,8 @@ import type WebKit from 'gi://WebKit?version=6.0';
 import type { IpcRouter } from '../main/core/ipc-router';
 import type { MainWindow } from '../main/core/window';
 import type { AccountService } from '../main/features/account/account.service';
+import type { BookmarksService } from '../main/features/bookmarks/bookmarks.service';
+import type { BookmarksPopup } from '../main/core/bookmarks-popup';
 import type { CookiesService } from '../main/features/cookies/cookies.service';
 import type { DevToolsPanelService } from '../main/features/devtools/devtools-panel.service';
 import type { DevToolsService } from '../main/features/devtools/devtools.service';
@@ -34,6 +36,8 @@ export interface BrowserContext {
   shortcuts: ShortcutsService;
   keybindings: KeybindingsService;
   history: HistoryService;
+  bookmarks: BookmarksService;
+  bookmarksPopup: BookmarksPopup;
   userCss: UserCssService;
   account: AccountService;
   cookies: CookiesService;

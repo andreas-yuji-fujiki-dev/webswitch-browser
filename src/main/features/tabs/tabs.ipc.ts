@@ -24,6 +24,15 @@ export function registerTabsIpc(router: IpcRouter, service: TabsService): void {
       );
     }
   });
+  router.handle(IPC_CHANNELS.tabs.setPinned, (tabId, pinned) => {
+    service.setPinned(tabId, pinned);
+  });
+  router.handle(IPC_CHANNELS.tabs.setMuted, (tabId, muted) => {
+    service.setMuted(tabId, muted);
+  });
+  router.handle(IPC_CHANNELS.tabs.reorder, (order) => {
+    service.reorderTabs(order);
+  });
 
   service.onStateChanged((state) => {
     router.emit(IPC_CHANNELS.tabs.stateChanged, state);

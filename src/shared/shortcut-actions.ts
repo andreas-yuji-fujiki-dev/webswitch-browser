@@ -9,6 +9,7 @@ export const SHORTCUT_ACTIONS = {
   previousTab: { label: 'Previous tab', defaults: ['Ctrl+Shift+Tab', 'Ctrl+PageUp'] },
   lastTab: { label: 'Last tab', defaults: ['Ctrl+9'] },
   openHistory: { label: 'History', defaults: ['Ctrl+H'] },
+  bookmarkPage: { label: 'Bookmark this page', defaults: ['Ctrl+D'] },
   focusAddressBar: { label: 'Focus address bar', defaults: ['Ctrl+L', 'Alt+D', 'F6'] },
   reload: { label: 'Reload', defaults: ['Ctrl+R', 'F5'] },
   hardReload: { label: 'Reload, ignoring cache', defaults: ['Ctrl+Shift+R', 'Ctrl+F5'] },

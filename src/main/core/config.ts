@@ -48,6 +48,7 @@ export const HISTORY_MAX_ENTRIES = 20000;
 export const HISTORY_QUERY_MAX = 500;
 // Reloading a page right away must not add a second entry.
 export const HISTORY_DEDUPE_MS = 10_000;
+export const BOOKMARKS_FILENAME = 'bookmarks.json';
 
 // Signing in is just visiting Google's own page. The browser makes no request until the user clicks.
 export const GOOGLE_SIGN_IN_URL =

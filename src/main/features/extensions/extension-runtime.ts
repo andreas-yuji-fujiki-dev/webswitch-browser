@@ -19,7 +19,7 @@ import { commandShortcut, ExtensionExtras } from './extension-extras';
 import { ExtensionMenus } from './extension-menus';
 import { NativeHosts } from './extension-native';
 import { ExtensionProxy } from './extension-proxy';
-import { buildShim, buildUserShim } from './extension-shim';
+import { buildFrameBridge, buildShim, buildUserShim } from './extension-shim';
 import { ExtensionScripts } from './extension-scripts';
 import { ExtensionUserScripts } from './extension-userscripts';
 import type { ExtensionsService } from './extensions.service';
@@ -49,6 +49,9 @@ const POPUP_MAX = { width: 800, height: 600 };
 const POPUP_MIN = { width: 120, height: 60 };
 const EXEC_SCRIPT_TIMEOUT_MS = 5000;
 const EXEC_SCRIPT_POLL_MS = 25;
+const FRAMES_HANDLER = 'wsframes';
+const FRAMES_WORLD = 'ws-frames';
+const FRAME_EXEC_ANSWER_S = 10;
 
 const worldOf = (id: string): string => `ext-${id}`;
 const userWorldOf = (id: string): string => `ext-${id}-us`;
@@ -66,6 +69,41 @@ const styleScript = (css: string): string =>
   `(() => { const put = () => { const style = document.createElement('style'); style.textContent = ${JSON.stringify(css)}; (document.head || document.documentElement).append(style); };
   if (document.documentElement) put();
   else new MutationObserver((_records, observer) => { if (document.documentElement) { observer.disconnect(); put(); } }).observe(document, { childList: true }); })();`;
+
+/**
+ * A CSS file's own text, made safe to use outside the extension's own origin: content_scripts'
+ * `css` and `chrome.scripting.insertCSS`'s `files` both transplant the text into a page of a
+ * different origin, unlike the extension's own pages (whose relative/root-relative url()s already
+ * resolve correctly, since the page's own address already is webswitch-ext://<id>/...). Two real
+ * bugs found this way (2026-09-29), both from real Store extensions, read directly (not guessed):
+ * Mobile Simulator's own icon font (`css/simulator.css`, `url(/fonts/icomoon.ttf)`, root-relative,
+ * silently 404ing against whatever page it was injected into) and Music Identifier's content
+ * script CSS (`static/styles/rate-us.css`, referencing its own font as
+ * `chrome-extension://__MSG_@@extension_id__/static/fonts/...` -- Chrome's own placeholder,
+ * substituted when Chrome serves a css *file*, same as extension-scheme.ts already does for a
+ * page fetching one directly, but never for CSS text moved into a page this way). `url(#id)` (an
+ * SVG element referenced by fragment, e.g. a filter for a frosted-glass effect) is left alone: it
+ * names an element in the transplanted-into page's own document, not a file of the extension's,
+ * and resolving it against the CSS file's own address would point it at the file's own
+ * (nonexistent) fragment instead.
+ */
+export function prepareExtensionCss(css: string, id: string, path: string): string {
+  const substituted = css
+    .replaceAll(`chrome-extension://__MSG_@@extension_id__`, `${EXTENSION_SCHEME}://${id}`)
+    .replaceAll('__MSG_@@extension_id__', id);
+  const base = `${EXTENSION_SCHEME}://${id}/${path.replace(/^\//, '')}`;
+  return substituted.replace(
+    /url\(\s*(['"]?)([^'")]+)\1\s*\)/g,
+    (whole: string, quote: string, ref: string) => {
+      if (ref.startsWith('#')) return whole;
+      try {
+        return `url(${quote}${GLib.Uri.resolve_relative(base, ref, GLib.UriFlags.NONE)}${quote})`;
+      } catch {
+        return whole;
+      }
+    },
+  );
+}
 
 /** A test on the address that includeGlobs and excludeGlobs ask for, as JavaScript; null when there are none. */
 const globGuard = (include?: string[], exclude?: string[]): string | null => {
@@ -108,6 +146,17 @@ export class ExtensionRuntime {
   private activeTab: number | null = null;
   private readonly registered = new WeakMap<WebKit.UserContentManager, Set<string>>();
   private readonly pageViews = new Map<WebKit.WebView, string>();
+  /**
+   * Sub-frames Webswitch has heard from in a tab, via the frame bridge (`setupFrameBridge`):
+   * frameId 0 (the top frame) is never stored here. See `buildFrameBridge` for why this exists —
+   * WebKitGTK's own API has no per-frame identity or per-frame script execution at all.
+   */
+  private readonly frameInfo = new WeakMap<
+    WebKit.WebView,
+    Map<number, { url: string; parentFrameId: number }>
+  >();
+  /** The next frameId `setupFrameBridge` hands out for a tab's own sub-frames, starting at 1. */
+  private readonly frameNext = new WeakMap<WebKit.WebView, number>();
   /**
    * A tab (not a background/popup/options `pageView`) that is currently showing one of an active
    * extension's own pages, opened through `tabs.create`/`tabs.update` — not a foreign page's link or
@@ -750,6 +799,7 @@ export class ExtensionRuntime {
       this.addContent(manager, view, extension);
       for (const filter of this.dnr.filtersOf(extension.summary.id)) manager.add_filter(filter);
     }
+    if (active.length > 0) this.setupFrameBridge(manager, view);
     // A tab currently on one of an extension's own pages (see `allowsTabNavigation`) is as privileged
     // as that extension's background/popup/options views, not limited to whatever its content_scripts
     // happen to match (an onboarding page, for instance, matches no content script at all).
@@ -785,6 +835,178 @@ export class ExtensionRuntime {
     manager.connect(`script-message-with-reply-received::${name}`, (_manager, value, reply) => {
       void this.dispatch(id, { kind: 'page', view }, value, reply);
       return true;
+    });
+  }
+
+  // ── the sub-frame bridge (see `buildFrameBridge`) ──────────────────────────────────────────
+  /** Wires up `buildFrameBridge` for one tab: once per manager, like every other handler here. */
+  private setupFrameBridge(manager: WebKit.UserContentManager, view: WebKit.WebView): void {
+    const done = this.registered.get(manager) ?? new Set<string>();
+    this.registered.set(manager, done);
+    if (!done.has(FRAMES_HANDLER)) {
+      done.add(FRAMES_HANDLER);
+      manager.register_script_message_handler_with_reply(FRAMES_HANDLER, FRAMES_WORLD);
+      manager.connect(
+        `script-message-with-reply-received::${FRAMES_HANDLER}`,
+        (_manager, value, reply) => {
+          this.handleFrameMessage(view, value, reply);
+          return true;
+        },
+      );
+    }
+    manager.add_script(
+      WebKit.UserScript.new_for_world(
+        buildFrameBridge(),
+        WebKit.UserContentInjectedFrames.ALL_FRAMES,
+        WebKit.UserScriptInjectionTime.START,
+        FRAMES_WORLD,
+        null,
+        null,
+      ),
+    );
+  }
+
+  /** A frame (main or sub) announcing itself, reporting its own load, or answering an `execInFrame`. */
+  private handleFrameMessage(
+    view: WebKit.WebView,
+    value: JavaScriptCore.Value,
+    reply: WebKit.ScriptMessageReply,
+  ): void {
+    const ok = (): void => {
+      reply.return_value(JavaScriptCore.Value.new_string(value.get_context(), '{}'));
+    };
+    let call: Record<string, unknown>;
+    try {
+      call = JSON.parse(value.to_string()) as Record<string, unknown>;
+    } catch {
+      reply.return_error_message('bad frame message');
+      return;
+    }
+    const url = typeof call.url === 'string' ? call.url : '';
+    if (call.op === 'announce') {
+      const top = call.top === true;
+      let registry = this.frameInfo.get(view);
+      if (!registry) {
+        registry = new Map();
+        this.frameInfo.set(view, registry);
+      }
+      let frameId: number;
+      if (top) {
+        frameId = 0;
+      } else {
+        frameId = this.frameNext.get(view) ?? 1;
+        this.frameNext.set(view, frameId + 1);
+      }
+      registry.set(frameId, { url, parentFrameId: top ? -1 : 0 });
+      reply.return_value(
+        JavaScriptCore.Value.new_string(value.get_context(), JSON.stringify({ frameId })),
+      );
+      if (!top) this.fireFrameNavigation(view, frameId, url, 'committed');
+      return;
+    }
+    if (call.op === 'loaded') {
+      ok();
+      const frameId = typeof call.frameId === 'number' ? call.frameId : null;
+      if (frameId !== null && frameId !== 0)
+        this.fireFrameNavigation(view, frameId, url, 'completed');
+      return;
+    }
+    if (call.op === 'exec-result') {
+      ok();
+      const callId = typeof call.callId === 'number' ? call.callId : null;
+      if (callId !== null) {
+        this.waiting.get(callId)?.({
+          response: {
+            result: call.result,
+            error: typeof call.error === 'string' ? call.error : undefined,
+          },
+          empty: false,
+        });
+        this.waiting.delete(callId);
+      }
+      return;
+    }
+    ok();
+  }
+
+  /** Tells every active extension with `webNavigation` about one sub-frame's own navigation. */
+  private fireFrameNavigation(
+    view: WebKit.WebView,
+    frameId: number,
+    url: string,
+    phase: 'committed' | 'completed',
+  ): void {
+    const tabId = this.host.tabIdOf(view);
+    if (tabId === null) return;
+    const timeStamp = Date.now();
+    for (const extension of this.service.active()) {
+      if (!this.has(extension, 'webNavigation')) continue;
+      // Same visibility rule as the top frame's own events in `navigated()`: only an extension that
+      // could reach this URL some other way (tabs, activeTab, or its own host access) is told it.
+      const visible =
+        this.has(extension, 'tabs') ||
+        this.has(extension, 'activeTab') ||
+        matchesAny(hostsOf(extension.manifest), url);
+      const details = {
+        tabId,
+        url: visible ? url : '',
+        frameId,
+        parentFrameId: 0,
+        processId: -1,
+        timeStamp,
+      };
+      if (phase === 'committed') {
+        this.fireIn(extension.summary.id, 'webNavigation.onCommitted', [
+          { ...details, transitionType: 'auto_subframe', transitionQualifiers: [] },
+        ]);
+      } else {
+        this.fireIn(extension.summary.id, 'webNavigation.onDOMContentLoaded', [details]);
+        this.fireIn(extension.summary.id, 'webNavigation.onCompleted', [details]);
+      }
+    }
+  }
+
+  /** The frames Webswitch currently knows about in one tab, for `chrome.webNavigation.getAllFrames`. */
+  private framesOf(
+    view: WebKit.WebView,
+  ): { frameId: number; parentFrameId: number; url: string; errorOccurred: boolean }[] {
+    const frames = [
+      { frameId: 0, parentFrameId: -1, url: view.get_uri() ?? '', errorOccurred: false },
+    ];
+    const registry = this.frameInfo.get(view);
+    if (registry) {
+      for (const [frameId, info] of registry) {
+        if (frameId === 0) continue;
+        frames.push({
+          frameId,
+          parentFrameId: info.parentFrameId,
+          url: info.url,
+          errorOccurred: false,
+        });
+      }
+    }
+    return frames;
+  }
+
+  /**
+   * Runs `script` inside one specific sub-frame, indirectly: `evaluate_javascript` can only ever
+   * reach the top frame, so this asks the top frame's own `buildFrameBridge` copy to broadcast the
+   * script into every one of its direct iframes via `postMessage` (a cross-origin-safe, standard web
+   * API, unlike a direct property read) — only the iframe whose own bridge script recognizes
+   * `frameId` as its own actually runs it, then answers back the same way `runtime.respond` does.
+   */
+  private execInFrame(view: WebKit.WebView, frameId: number, script: string): Promise<unknown> {
+    return this.request(
+      view,
+      null,
+      (callId) =>
+        `(() => { var msg = { __wsExec: true, frameId: ${String(frameId)}, callId: ${String(callId)}, script: ${JSON.stringify(script)} }; var frames = document.querySelectorAll('iframe'); for (var i = 0; i < frames.length; i++) { try { frames[i].contentWindow.postMessage(msg, '*'); } catch (e) {} } })(); 0`,
+      FRAME_EXEC_ANSWER_S,
+    ).then((answer) => {
+      if (answer.empty) throw new Error('The frame did not answer in time.');
+      const payload = answer.response as { result?: unknown; error?: string } | null;
+      if (payload && typeof payload.error === 'string') throw new Error(payload.error);
+      return payload ? payload.result : undefined;
     });
   }
 
@@ -863,8 +1085,15 @@ export class ExtensionRuntime {
         );
       }
       for (const path of entry.css ?? []) {
-        const css = this.readSource(extension, path);
-        if (css === null) continue;
+        const source = this.readSource(extension, path);
+        if (source === null) continue;
+        // Same transplant problem as chrome.scripting.insertCSS's `files` (see insertCss): a
+        // content script's own CSS text moves into a page of a different origin, so its
+        // __MSG_@@extension_id__ placeholders and relative/root-relative url()s must be resolved
+        // here, against the extension's own address, before that happens -- found for real via
+        // "Music Identifier"'s content-script CSS (static/styles/rate-us.css, its own icon font
+        // referenced as chrome-extension://__MSG_@@extension_id__/static/fonts/..., unresolved).
+        const css = prepareExtensionCss(source, id, path);
         // WebKit applies no AUTHOR level user style sheet here (measured), and a USER level one loses
         // to the page's own rules of the same weight. So both: the sheet, which always applies (and
         // ignores the page's CSP), and a <style> element added by a script, which ranks like Chrome's.
@@ -1078,7 +1307,12 @@ export class ExtensionRuntime {
         }
         return this.handleStorage(id, call);
       case 'runtime.sendMessage':
-        return await this.route(extension, source, call.message);
+        return await this.route(
+          extension,
+          source,
+          call.message,
+          typeof call.targetId === 'string' ? call.targetId : null,
+        );
       case 'runtime.respond': {
         const callId = Number(call.callId);
         this.waiting.get(callId)?.({ response: call.response, empty: call.empty === true });
@@ -1223,10 +1457,10 @@ export class ExtensionRuntime {
         if (source.kind === 'content')
           throw new Error('Native messaging is not available in content scripts.');
         return await this.natives.sendOnce(id, String(call.name), call.message);
-      case 'webNavigation.getAllFrames':
-        return this.host.viewOf(Number((call.details as { tabId?: number }).tabId))
-          ? [{ frameId: 0, parentFrameId: -1, url: '', errorOccurred: false }]
-          : null;
+      case 'webNavigation.getAllFrames': {
+        const targetView = this.host.viewOf(Number((call.details as { tabId?: number }).tabId));
+        return targetView ? this.framesOf(targetView) : null;
+      }
       case 'runtime.openOptionsPage':
         this.openOptions(id);
         return undefined;
@@ -1282,6 +1516,8 @@ export class ExtensionRuntime {
         return await this.sendToTab(extension, Number(call.id), call.message, source);
       case 'tabs.captureVisibleTab':
         return await this.capture(extension);
+      case 'pageCapture.save':
+        return await this.captureMhtml(extension, call);
       case 'tabs.executeScript': {
         const details = (call.details ?? {}) as Record<string, unknown>;
         const tabId = this.tabIdFrom(call.id);
@@ -1554,6 +1790,9 @@ export class ExtensionRuntime {
   ): Promise<void> {
     const { id } = extension.summary;
     const portId = String(call.portId);
+    const targetId =
+      typeof call.targetId === 'string' && call.targetId !== '' ? call.targetId : null;
+    const external = targetId !== null && targetId !== id;
     for (const [key, entry] of this.ports) if (!entry.origin.view.deref()) this.ports.delete(key);
     const entry: PortEntry = {
       extension: id,
@@ -1564,24 +1803,41 @@ export class ExtensionRuntime {
     // Registered before anything is awaited: the first message may follow the connect at once.
     this.ports.set(portId, entry);
     entry.ready = (async () => {
-      const background = this.backgrounds.get(id);
       let peers: PortEndpoint[] = [];
-      if (call.tabId !== null && call.tabId !== undefined) {
-        const view = this.host.viewOf(Number(call.tabId));
-        if (view) peers = [{ view: new WeakRef(view), world: worldOf(id) }];
-      } else if (background?.view === source.view) {
-        peers = [...this.pageViews]
-          .filter(([view, owner]) => owner === id && view !== source.view)
-          .map(([view]) => ({ view: new WeakRef(view), world: null }));
-      } else if (background) {
-        await background.loaded;
-        peers = [{ view: new WeakRef(background.view), world: null }];
+      if (external) {
+        // `chrome.runtime.connect(targetId, ...)`: only the target's background page, and only
+        // when it opted the caller in via `externally_connectable.ids` (see routeExternal).
+        const target = this.service.active().find((candidate) => candidate.summary.id === targetId);
+        if (target && this.allowsExternal(target, id)) {
+          const targetBackground = this.backgrounds.get(targetId);
+          if (targetBackground) {
+            await targetBackground.loaded;
+            peers = [{ view: new WeakRef(targetBackground.view), world: null }];
+          }
+        }
+        debug(
+          'extension-api',
+          `port ${portId}: external connect from ${id} to ${targetId ?? ''}, allowed=${String(peers.length > 0)}`,
+        );
+      } else {
+        const background = this.backgrounds.get(id);
+        if (call.tabId !== null && call.tabId !== undefined) {
+          const view = this.host.viewOf(Number(call.tabId));
+          if (view) peers = [{ view: new WeakRef(view), world: worldOf(id) }];
+        } else if (background?.view === source.view) {
+          peers = [...this.pageViews]
+            .filter(([view, owner]) => owner === id && view !== source.view)
+            .map(([view]) => ({ view: new WeakRef(view), world: null }));
+        } else if (background) {
+          await background.loaded;
+          peers = [{ view: new WeakRef(background.view), world: null }];
+        }
+        debug(
+          'extension-api',
+          `port ${portId} (${typeof call.name === 'string' ? call.name : ''}): background=${String(!!background)} peers=${String(peers.length)}`,
+        );
       }
       entry.peers = peers;
-      debug(
-        'extension-api',
-        `port ${portId} (${typeof call.name === 'string' ? call.name : ''}): background=${String(!!background)} loaded=${String(background ? await Promise.race([background.loaded.then(() => true), Promise.resolve('pending')]) : 'n/a')} peers=${String(peers.length)}`,
-      );
       if (peers.length === 0) {
         this.ports.delete(portId);
         debug(
@@ -1594,15 +1850,21 @@ export class ExtensionRuntime {
         );
         return;
       }
+      if (external && targetId) entry.externalPeer = targetId;
       const sender = JSON.stringify(this.senderOf(extension, source));
       for (const peer of peers) {
         this.evalIn(
           peer,
-          `self.__wsExt && __wsExt.portConnect(${JSON.stringify(portId)}, ${JSON.stringify(typeof call.name === 'string' ? call.name : '')}, ${sender});`,
+          `self.__wsExt && __wsExt.portConnect(${JSON.stringify(portId)}, ${JSON.stringify(typeof call.name === 'string' ? call.name : '')}, ${sender}, ${String(external)});`,
         );
       }
     })();
     return entry.ready;
+  }
+
+  /** Whether `extensionId` is allowed to act on `entry`: its own port, or (for an external port) the target's. */
+  private ownsPort(entry: PortEntry, extensionId: string): boolean {
+    return entry.extension === extensionId || entry.externalPeer === extensionId;
   }
 
   private async portPost(
@@ -1612,7 +1874,7 @@ export class ExtensionRuntime {
   ): Promise<void> {
     const portId = String(call.portId);
     const entry = this.ports.get(portId);
-    if (entry?.extension !== extension.summary.id) return;
+    if (!entry || !this.ownsPort(entry, extension.summary.id)) return;
     await entry.ready;
     const script = `self.__wsExt && __wsExt.portMessage(${JSON.stringify(portId)}, ${JSON.stringify(call.message ?? null)});`;
     for (const side of this.otherSides(entry, source)) this.evalIn(side, script);
@@ -1620,7 +1882,7 @@ export class ExtensionRuntime {
 
   private portDisconnect(extension: LoadedExtension, source: RuntimeSource, portId: string): void {
     const entry = this.ports.get(portId);
-    if (entry?.extension !== extension.summary.id) return;
+    if (!entry || !this.ownsPort(entry, extension.summary.id)) return;
     this.ports.delete(portId);
     const script = `self.__wsExt && __wsExt.portDisconnect(${JSON.stringify(portId)});`;
     for (const side of this.otherSides(entry, source)) this.evalIn(side, script);
@@ -1682,8 +1944,18 @@ export class ExtensionRuntime {
     if (tabId === null || this.service.active().length === 0) return;
     const url = view.get_uri();
     const timeStamp = Date.now();
+    // Chrome hides a webNavigation event's own url from an extension with neither the 'tabs'
+    // permission nor host access to it, so a page it cannot otherwise see does not leak through
+    // navigation events either — but activeTab counts too, the same as it already does for
+    // scripting/capture elsewhere in this file: a real click on the toolbar button is exactly what
+    // activeTab is for. Missing this made Responsive Viewer's own (correct, Chrome-compatible)
+    // hostname check on the event always fail after a real click, so it silently never injected.
     const seen = (extension: LoadedExtension): string =>
-      this.has(extension, 'tabs') || matchesAny(hostsOf(extension.manifest), url) ? url : '';
+      this.has(extension, 'tabs') ||
+      this.has(extension, 'activeTab') ||
+      matchesAny(hostsOf(extension.manifest), url)
+        ? url
+        : '';
     const details = (extension: LoadedExtension): Record<string, unknown> => ({
       tabId,
       url: seen(extension),
@@ -1871,8 +2143,12 @@ export class ExtensionRuntime {
     extension: LoadedExtension,
     source: RuntimeSource,
     message: unknown,
+    targetId?: string | null,
   ): Promise<unknown> {
     const { id } = extension.summary;
+    if (typeof targetId === 'string' && targetId !== '' && targetId !== id) {
+      return this.routeExternal(extension, source, message, targetId);
+    }
     const sender = this.senderOf(extension, source);
     const background = this.backgrounds.get(id);
     const fromBackground = background?.view === source.view;
@@ -1886,10 +2162,37 @@ export class ExtensionRuntime {
       targets = [background.view];
     }
     for (const view of targets) {
-      const answer = await this.deliver(view, null, message, sender);
+      const answer = await this.deliver(view, null, message, sender, false);
       if (!answer.empty) return answer.response;
     }
     return undefined;
+  }
+
+  /**
+   * `chrome.runtime.sendMessage(targetId, message)`: only reaches the target's background page,
+   * and only when the target lists the caller in its own manifest's `externally_connectable.ids`
+   * (matching Chrome's security boundary — otherwise any extension could message any other).
+   */
+  private async routeExternal(
+    extension: LoadedExtension,
+    source: RuntimeSource,
+    message: unknown,
+    targetId: string,
+  ): Promise<unknown> {
+    const target = this.service.active().find((candidate) => candidate.summary.id === targetId);
+    if (!target || !this.allowsExternal(target, extension.summary.id)) return undefined;
+    const background = this.backgrounds.get(targetId);
+    if (!background) return undefined;
+    await background.loaded;
+    const sender = this.senderOf(extension, source);
+    const answer = await this.deliver(background.view, null, message, sender, true);
+    return answer.empty ? undefined : answer.response;
+  }
+
+  /** Whether `target`'s manifest opts a `callerId` into `externally_connectable`. */
+  private allowsExternal(target: LoadedExtension, callerId: string): boolean {
+    const ids = target.manifest.externally_connectable?.ids;
+    return Array.isArray(ids) && ids.includes(callerId);
   }
 
   private async sendToTab(
@@ -1905,6 +2208,7 @@ export class ExtensionRuntime {
       worldOf(extension.summary.id),
       message,
       this.senderOf(extension, source),
+      false,
     );
     return answer.empty ? undefined : answer.response;
   }
@@ -1914,12 +2218,13 @@ export class ExtensionRuntime {
     world: string | null,
     message: unknown,
     sender: unknown,
+    external: boolean,
   ): Promise<{ response: unknown; empty: boolean }> {
     return this.request(
       view,
       world,
       (callId) =>
-        `self.__wsExt && __wsExt.deliver(${String(callId)}, ${JSON.stringify(message ?? null)}, ${JSON.stringify(sender)});`,
+        `self.__wsExt && __wsExt.deliver(${String(callId)}, ${JSON.stringify(message ?? null)}, ${JSON.stringify(sender)}, ${String(external)});`,
     );
   }
 
@@ -2006,6 +2311,20 @@ export class ExtensionRuntime {
     scripting: boolean,
   ): Promise<unknown> {
     const view = this.tabView(extension, injection, scripting);
+    // A target naming one specific sub-frame (frameId != 0): evaluate_javascript can only ever
+    // reach the top frame, so this goes through the frame bridge instead — see `execInFrame`.
+    const targetFrameIds = (injection.target as { frameIds?: unknown } | undefined)?.frameIds;
+    const frameId = Array.isArray(targetFrameIds) ? Number(targetFrameIds[0]) : undefined;
+    if (frameId !== undefined && frameId !== 0) {
+      const script =
+        typeof injection.func === 'string'
+          ? `(${injection.func})(...${JSON.stringify(injection.args ?? [])})`
+          : typeof injection.code === 'string'
+            ? injection.code
+            : this.filesOf(extension, injection);
+      const result = await this.execInFrame(view, frameId, script);
+      return [{ frameId, result }];
+    }
     const world = injection.world === 'MAIN' ? null : worldOf(extension.summary.id);
     // A page that is still loading has not had the extension's API put in its world yet.
     const shim = world === null ? '' : `${buildShim(this.shimConfig(extension, 'content'))}\n;`;
@@ -2068,10 +2387,62 @@ export class ExtensionRuntime {
     scripting: boolean,
   ): Promise<unknown> {
     const view = this.tabView(extension, injection, scripting);
+    // A real Chrome CSS file's own url()s and __MSG_@@extension_id__ placeholders resolve
+    // against the extension's own origin, because Chrome serves the file as an extension
+    // resource, not as page content. Reading the file's text and inlining it as-is broke that: a
+    // root-relative url(/fonts/x.ttf) resolved against the PAGE's own origin instead, 404ing
+    // there -- confirmed against a real Store extension (Mobile Simulator's css/simulator.css,
+    // referencing /fonts/icomoon.ttf this way; every icon it draws with that font silently
+    // disappeared on whatever page it was injected into). `prepareExtensionCss` fixes this by
+    // substituting the placeholder and rewriting relative url()s to an absolute webswitch-ext://
+    // address before inlining, same as content_scripts' own css does below -- rather than
+    // switching to a <link> element: a <link> would make the PAGE itself fetch the stylesheet,
+    // which -- unlike this privileged native call -- is gated by web_accessible_resources in
+    // extension-scheme.ts, breaking extensions (like the `hello` fixture) that never needed to
+    // declare their CSS there because Chrome's insertCSS never subjects the top-level file itself
+    // to that check either (only the url()-referenced sub-resources are, which is exactly what
+    // still happens here once the address is absolute).
+    const id = extension.summary.id;
     const css =
-      typeof injection.css === 'string' ? injection.css : this.filesOf(extension, injection);
+      typeof injection.css === 'string'
+        ? injection.css // A raw string has no file of its own to resolve a relative url() against.
+        : ((injection.files as string[] | undefined) ?? [])
+            .map((path) => {
+              const source = this.readSource(extension, path);
+              return source === null ? '' : prepareExtensionCss(source, id, path);
+            })
+            .join('\n');
+    // A plain, one-shot <style> DOM node is fragile: an extension that rebuilds its own injected
+    // UI by replacing document.documentElement.innerHTML wholesale -- a real, working pattern,
+    // not a bug of the page's -- silently destroys it along with everything else, and insertCSS
+    // never runs again to replace it (confirmed against Mobile Simulator's real background.js:
+    // insertCSS resolves and the <style> lands within 100 ms of it, then simulator.js's own
+    // startup does exactly that wipe soon after, and nothing re-inserts the styles -- the whole
+    // UI it draws renders with no styling from then on). A WebKit.UserStyleSheet on the tab's own
+    // UserContentManager (the same mechanism content_scripts' own css already uses, added below)
+    // was tried first and made no difference: empirically, WebKit only folds a UserStyleSheet
+    // into an ALREADY-loaded document's applicable styles at that document's own next navigation,
+    // not retroactively into a live one -- and insertCSS is called mid-session, into a document
+    // that is not about to navigate again. Fixed instead with a small self-healing script: a
+    // MutationObserver on document.documentElement (identity-stable across an innerHTML
+    // replacement, since that clears its children, not the node itself) re-adds the <style> by a
+    // fixed id whenever it is no longer present, so however many times the page's own code wipes
+    // and rebuilds, the styles come back within one animation frame every time.
+    const marker = `ws-insert-css-${Math.random().toString(36).slice(2)}`;
     await view.evaluate_javascript(
-      `(() => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(css)}; (document.head || document.documentElement).append(s); })();`,
+      `(() => {
+        const CSS_TEXT = ${JSON.stringify(css)};
+        const MARKER = ${JSON.stringify(marker)};
+        const ensure = () => {
+          if (document.getElementById(MARKER)) return;
+          const s = document.createElement('style');
+          s.id = MARKER;
+          s.textContent = CSS_TEXT;
+          (document.head || document.documentElement).appendChild(s);
+        };
+        ensure();
+        new MutationObserver(ensure).observe(document.documentElement, { childList: true, subtree: true });
+      })();`,
       -1,
       null,
       null,
@@ -2094,6 +2465,35 @@ export class ExtensionRuntime {
       null,
     );
     return `data:image/png;base64,${GLib.base64_encode(texture.save_to_png_bytes().toArray())}`;
+  }
+
+  /** `chrome.pageCapture.saveAsMHTML`: a tab's page, saved by WebKit itself in MHTML format. */
+  private async captureMhtml(extension: LoadedExtension, call: ExtensionCall): Promise<string> {
+    this.require(extension, 'pageCapture');
+    const tabId = typeof call.tabId === 'number' ? call.tabId : undefined;
+    const view =
+      tabId === undefined
+        ? (() => {
+            const active = this.host.listTabs().find((tab) => tab.active);
+            return active ? this.host.viewOf(active.id) : null;
+          })()
+        : this.host.viewOf(tabId);
+    if (!view) throw new Error('No such tab.');
+    const stream = await view.save(WebKit.SaveMode.MHTML, null);
+    const chunks: Uint8Array[] = [];
+    for (;;) {
+      const chunk = await stream.read_bytes_async(65536, GLib.PRIORITY_DEFAULT, null);
+      if (chunk.get_size() === 0) break;
+      chunks.push(chunk.toArray());
+    }
+    const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return GLib.base64_encode(bytes);
   }
 
   // ── fetch, for the hosts the extension declared ────────────────────────────────────────────

@@ -22,7 +22,7 @@ export const SETTINGS = [
     effect: 'restart',
     label: 'Draw pages with the GPU',
     description:
-      'Off draws pages in software: fixed headers do not jump and text does not flicker while scrolling fast on laptops with two GPUs, but canvas and WebGL pages are slower. On lets WebKit use the GPU.',
+      'Off draws pages in software: fixed headers do not jump and text does not flicker while scrolling fast on laptops with two GPUs, but canvas and WebGL pages are slower, and on an NVIDIA laptop video can turn solid black on some sites (confirmed on youtube.com). If that happens, turn this on together with "Keep the browser on the integrated GPU" below — video comes back, at the cost of the scrolling flicker returning too. On lets WebKit use the GPU.',
   },
   {
     id: 'integratedGpuOnly',
@@ -32,7 +32,7 @@ export const SETTINGS = [
     effect: 'restart',
     label: 'Keep the browser on the integrated GPU',
     description:
-      'Hides the discrete graphics card (NVIDIA) from the browser on laptops with two GPUs, which saves battery. Only matters when pages are drawn with the GPU.',
+      'Hides the discrete graphics card (NVIDIA) from the browser on laptops with two GPUs, which saves battery and, together with "Draw pages with the GPU" above, is what fixes video turning black on some sites on an NVIDIA laptop. Only matters when pages are drawn with the GPU.',
   },
   {
     id: 'smoothScrolling',
@@ -115,6 +115,16 @@ export const SETTINGS = [
     label: 'WebGL',
     description:
       'Lets pages draw 3D graphics. Off also removes a way pages identify your graphics card.',
+  },
+  {
+    id: 'bookmarksBarHomeOnly',
+    section: 'pages',
+    kind: 'toggle',
+    default: false,
+    effect: 'now',
+    label: 'Only show the bookmarks bar on the home page',
+    description:
+      'The bar stays hidden everywhere else, even with bookmarks in it. Off (the default) shows it on every page, whenever there is at least one bookmark.',
   },
   {
     id: 'searchEngine',

@@ -104,6 +104,13 @@ export function createExtensionsPage(api: BrowserApi): BuiltInPage {
   function installPanel(next: ExtensionsState): HTMLElement {
     const box = el('section', 'ex-add');
     box.append(el('h2', 'ex-h2', 'Add an extension'));
+    const search = el('button', 'ex-button', 'Search the Chrome Web Store');
+    search.title =
+      'Opens the real Chrome Web Store in a tab; a button appears there to install what you find';
+    search.addEventListener('click', () => {
+      void api.extensions.openStore();
+    });
+    box.append(search);
     const row = el('div', 'ex-add__row');
     const input = el('input', 'ex-input');
     input.type = 'text';

@@ -54,6 +54,11 @@ export function buildShim(config: ShimConfig): string {
 
   const onMessage = event();
   const onConnect = event();
+  // Cross-extension messaging (chrome.runtime.sendMessage(targetId, ...) / .connect(targetId, ...)):
+  // declared here, not inline below, so __wsExt.deliver/portConnect (defined later in this file, and
+  // reached from outside this object) can fire the same event instances the shim hands out.
+  const onMessageExternal = event();
+  const onConnectExternal = event();
   // Ports (chrome.runtime.connect): an id chosen here names the port on both sides.
   const ports = new Map();
   const closePort = (portId) => {
@@ -81,10 +86,16 @@ export function buildShim(config: ShimConfig): string {
   };
   const connectPort = (args, tabId) => {
     let info = {};
-    for (const arg of args) if (arg && typeof arg === 'object') info = arg;
+    let targetId = null;
+    for (const arg of args) {
+      if (typeof arg === 'string') targetId = arg;
+      else if (arg && typeof arg === 'object') info = arg;
+    }
     const portId = CONFIG.id + ':' + Math.random().toString(36).slice(2) + Date.now().toString(36);
     const port = makePort(portId, info.name || '', undefined);
-    call('port.connect', { portId, name: info.name || '', tabId }).catch(() => closePort(portId));
+    call('port.connect', { portId, name: info.name || '', tabId, targetId }).catch(() =>
+      closePort(portId),
+    );
     return port;
   };
   // Native messaging: a program on this computer that named this extension. A failure to start is
@@ -137,12 +148,14 @@ export function buildShim(config: ShimConfig): string {
     getManifest: () => CONFIG.manifest,
     getPlatformInfo: api(() => Promise.resolve({ os: 'linux', arch: 'x86-64', nacl_arch: 'x86-64' })),
     sendMessage: api((...args) => {
-      const payload = args.length >= 2 && typeof args[0] === 'string' && /^[a-p]{32}$/.test(args[0]) ? args[1] : args[0];
-      return call('runtime.sendMessage', { message: payload });
+      const external = args.length >= 2 && typeof args[0] === 'string' && /^[a-p]{32}$/.test(args[0]);
+      const payload = external ? args[1] : args[0];
+      return call('runtime.sendMessage', { message: payload, targetId: external ? args[0] : null });
     }),
     onMessage,
-    onMessageExternal: event(),
+    onMessageExternal,
     onConnect,
+    onConnectExternal,
     onInstalled: event(),
     onStartup: event(),
     onSuspend: event(),
@@ -385,6 +398,16 @@ export function buildShim(config: ShimConfig): string {
     chrome.tabs.ungroup = api(() => Promise.resolve());
     chrome.sidePanel = { setOptions: api(() => Promise.resolve()), setPanelBehavior: api(() => Promise.resolve()), getPanelBehavior: api(() => Promise.resolve({ openPanelOnActionClick: false })), open: fail('Webswitch has no side panel.') };
     chrome.tts = { speak: api(() => Promise.resolve()), stop: () => undefined, isSpeaking: api(() => Promise.resolve(false)), getVoices: api(() => Promise.resolve([])), onEvent: event() };
+    // WebKit saves the page itself (webkit_web_view_save with WEBKIT_SAVE_MODE_MHTML): a real
+    // capture, not a stub, unlike tabCapture/desktopCapture (no such hook exists in WebKitGTK).
+    chrome.pageCapture = {
+      saveAsMHTML: api((details) =>
+        call('pageCapture.save', { tabId: details && details.tabId }).then((base64) => {
+          const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+          return new Blob([bytes], { type: 'multipart/related' });
+        }),
+      ),
+    };
     chrome.system = { cpu: { getInfo: api(() => Promise.resolve({ numOfProcessors: navigator.hardwareConcurrency || 1, archName: 'x86_64', modelName: '', features: [], processors: [] })) }, memory: { getInfo: api(() => Promise.resolve({ capacity: 0, availableCapacity: 0 })) }, display: { getInfo: api(() => Promise.resolve([])) } };
     chrome.idle = { queryState: api(() => Promise.resolve('active')), setDetectionInterval: () => undefined, onStateChanged: event() };
     chrome.offscreen = {
@@ -520,6 +543,15 @@ export function buildShim(config: ShimConfig): string {
       MAX_NUMBER_OF_DYNAMIC_RULES: 30000, MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES: 5000, GUARANTEED_MINIMUM_STATIC_RULES: 30000, MAX_NUMBER_OF_ENABLED_STATIC_RULESETS: 50,
       RuleActionType: { BLOCK: 'block', ALLOW: 'allow', REDIRECT: 'redirect', UPGRADE_SCHEME: 'upgradeScheme', MODIFY_HEADERS: 'modifyHeaders', ALLOW_ALL_REQUESTS: 'allowAllRequests' },
       ResourceType: { MAIN_FRAME: 'main_frame', SUB_FRAME: 'sub_frame', SCRIPT: 'script', IMAGE: 'image', STYLESHEET: 'stylesheet', XMLHTTPREQUEST: 'xmlhttprequest', OTHER: 'other', FONT: 'font', MEDIA: 'media', PING: 'ping', WEBSOCKET: 'websocket', CSP_REPORT: 'csp_report', OBJECT: 'object' },
+      // These three were missing entirely: an extension that only reads them while building a rule
+      // object (never sends it anywhere on its own) got "undefined is not an object" from plain
+      // property access, before ever reaching a call() — a synchronous throw deep inside its own
+      // rule-building code, invisible here and easily swallowed by the extension's own try/catch
+      // (confirmed live: Responsive Viewer's own header-rule builder read HeaderOperation.REMOVE
+      // this way, threw, and its own defensive code silently gave up before ever injecting its UI).
+      HeaderOperation: { APPEND: 'append', SET: 'set', REMOVE: 'remove' },
+      DomainType: { FIRST_PARTY: 'firstParty', THIRD_PARTY: 'thirdParty' },
+      RequestMethod: { CONNECT: 'connect', DELETE: 'delete', GET: 'get', HEAD: 'head', OPTIONS: 'options', PATCH: 'patch', POST: 'post', PUT: 'put', OTHER: 'other' },
     };
     // Cross-origin fetches of an extension are allowed for the hosts it asked for: the browser makes them.
     const realFetch = self.fetch.bind(self);
@@ -542,7 +574,9 @@ export function buildShim(config: ShimConfig): string {
 
   // What the browser sends into this context: messages, and changes to storage.
   self.__wsExt = {
-    portConnect(portId, name, sender) { onConnect._fire(makePort(portId, name, sender)); },
+    portConnect(portId, name, sender, external) {
+      (external ? onConnectExternal : onConnect)._fire(makePort(portId, name, sender));
+    },
     portMessage(portId, message) { const port = ports.get(portId); if (port) port.onMessage._fire(message, port); },
     portDisconnect(portId) { closePort(portId); },
     // A user script sent a message (only when the extension turned messaging on for its world).
@@ -594,11 +628,11 @@ export function buildShim(config: ShimConfig): string {
     nativeMessage(portId, message) { const port = nativePorts.get(portId); if (port) port.onMessage._fire(message, port); },
     nativeClosed(portId, error) { closeNative(portId, error); },
     reportSize() { call('popup.size', { w: document.documentElement.scrollWidth, h: document.documentElement.scrollHeight }); },
-    deliver(callId, message, sender) {
+    deliver(callId, message, sender, external) {
       let answered = false;
       let waiting = false;
       const respond = (response) => { if (answered) return; answered = true; call('runtime.respond', { callId, response: response === undefined ? null : response, empty: response === undefined }); };
-      for (const listener of [...onMessage._listeners]) {
+      for (const listener of [...(external ? onMessageExternal : onMessage)._listeners]) {
         let result;
         try { result = listener(message, sender, respond); } catch (error) { console.error(error); continue; }
         if (result === true) waiting = true;
@@ -630,6 +664,54 @@ export function buildShim(config: ShimConfig): string {
   }
   self.chrome = chrome;
   if (!self.browser) self.browser = chrome;
+})();`;
+}
+
+/**
+ * WebKitGTK gives the UI process no way to run script in, or to learn when navigation finishes in,
+ * one specific sub-frame (confirmed against the actual GI bindings: `evaluate_javascript` takes no
+ * frame parameter, and `WebKit.NavigationAction` carries no frame identity beyond the often-empty
+ * HTML `name` attribute) — the two things `chrome.webNavigation`'s per-frame events and
+ * `chrome.scripting.executeScript({target:{frameIds}})` need. This bridges both using only standard,
+ * always-available web platform features: injected into every frame of every page (main and every
+ * iframe, same-origin or not — `window.postMessage` crosses origins by design, unlike a direct
+ * property read), it (1) announces itself and its own url to the native side once and gets back a
+ * frameId Webswitch assigns (0 is reserved for the top frame); (2) on the window's `load` event,
+ * reports that too, so native can fire onCompleted for it; (3) listens for a broadcast the native
+ * side sends into every direct iframe of the top frame (the only frame `evaluate_javascript` can
+ * ever target) and, only if the message names *this* frame's own assigned id, evaluates the script
+ * it carries and reports the result back — letting native reach one specific frame indirectly,
+ * without ever needing to identify it as a GObject. Runs in its own isolated world (`ws-frames`, see
+ * `extension-runtime.ts`'s `setupFrameBridge`): isolated worlds still share the page's real DOM and
+ * `window` object (only JS variables/functions are isolated), so a script this evaluates that sets a
+ * property on `window` — exactly what `chrome.scripting.executeScript({world:'MAIN', func: ...})`
+ * callers do — is visible to the page's own, unisolated scripts too.
+ */
+export function buildFrameBridge(): string {
+  return `(() => {
+  if (self.__wsFrameReady) return;
+  self.__wsFrameReady = true;
+  const handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.wsframes;
+  if (!handler) return;
+  const isTop = window === window.top;
+  handler.postMessage(JSON.stringify({ op: 'announce', url: location.href, top: isTop })).then((text) => {
+    let info = null;
+    try { info = JSON.parse(text || 'null'); } catch (e) { info = null; }
+    self.__wsFrameId = info && typeof info.frameId === 'number' ? info.frameId : null;
+    if (self.__wsFrameId === null) return;
+    const report = () => handler.postMessage(JSON.stringify({ op: 'loaded', frameId: self.__wsFrameId, url: location.href })).catch(() => undefined);
+    if (document.readyState === 'complete') report();
+    else window.addEventListener('load', report);
+  }).catch(() => undefined);
+  window.addEventListener('message', (event) => {
+    const data = event.data;
+    if (!data || data.__wsExec !== true || self.__wsFrameId === null || data.frameId !== self.__wsFrameId) return;
+    let result, error;
+    try { result = (0, eval)(data.script); } catch (e) { error = String((e && e.message) || e); }
+    try {
+      handler.postMessage(JSON.stringify({ op: 'exec-result', callId: data.callId, result: error === undefined ? result : undefined, error })).catch(() => undefined);
+    } catch (e) { /* result was not JSON-serializable; the caller times out instead of hanging forever */ }
+  });
 })();`;
 }
 

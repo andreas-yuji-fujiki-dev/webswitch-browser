@@ -28,6 +28,13 @@ const state = {
   dnr: 0,
   ownPage: null,
   ownPageTabId: null,
+  crossReply: null,
+  crossPortReply: null,
+  mhtmlType: null,
+  mhtmlLength: null,
+  mhtmlLooksRight: null,
+  insertCssUrls: null,
+  insertCssSurvivedWipe: null,
 };
 
 chrome.storage.local.set({ background: 'ran' });
@@ -294,6 +301,88 @@ self.openOwnPage = () =>
   chrome.tabs.create({ url: chrome.runtime.getURL('own-page.html') }).then((tab) => {
     state.ownPageTabId = tab.id;
   });
+
+// Cross-extension messaging (chrome.runtime.sendMessage(id, ...) / .connect(id, ...)): the `peer`
+// fixture lists this extension's real id in its own manifest's externally_connectable.ids.
+self.messageExternal = (targetId) =>
+  chrome.runtime.sendMessage(targetId, { type: 'external-ping', from: 'hello' }).then((reply) => {
+    state.crossReply = reply === undefined ? 'undefined' : JSON.stringify(reply);
+  });
+// chrome.pageCapture.saveAsMHTML: WebKit's own MHTML save, not a stub.
+self.captureMhtml = () =>
+  chrome.pageCapture
+    .saveAsMHTML({})
+    .then((blob) => {
+      state.mhtmlType = blob.type;
+      return blob.text();
+    })
+    .then((text) => {
+      state.mhtmlLength = text.length;
+      state.mhtmlLooksRight = /MIME-Version/i.test(text) && text.includes('Local Test Page');
+    });
+// chrome.scripting.insertCSS({ files }): a root-relative url() must resolve against the
+// extension's own origin, and a fragment-only url(#id) must be left alone (2026-09-29 fix).
+self.insertCssFile = (tabId) =>
+  chrome.scripting
+    .insertCSS({ target: { tabId }, files: ['insert-css-target.css'] })
+    .then(() =>
+      chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          const style = [...document.querySelectorAll('style')].find((s) =>
+            s.textContent.includes('ws-insert-css-test'),
+          );
+          return style ? style.textContent : null;
+        },
+      }),
+    )
+    .then((results) => {
+      state.insertCssUrls = results[0] && results[0].result;
+    });
+// The 2026-09-29 fix for insertCSS's own fragility: a page (or, as found here, the injecting
+// extension's own later script) that replaces document.documentElement.innerHTML wholesale --
+// a real, working pattern, confirmed against a real Store extension's own code (Mobile
+// Simulator) -- must not silently lose the inserted styles forever, the way a one-shot <style>
+// element did. Insert, then simulate exactly that wipe, then check the style comes back on its
+// own (the self-healing MutationObserver watchdog in insertCss).
+self.insertCssSurvivesWipe = (tabId) =>
+  chrome.scripting
+    .insertCSS({ target: { tabId }, files: ['insert-css-target.css'] })
+    .then(() =>
+      chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          document.documentElement.innerHTML = '<head></head><body>wiped</body>';
+        },
+      }),
+    )
+    .then(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => {
+            chrome.scripting
+              .executeScript({
+                target: { tabId },
+                func: () =>
+                  [...document.querySelectorAll('style')].some((s) =>
+                    s.textContent.includes('ws-insert-css-test'),
+                  ),
+              })
+              .then((results) => {
+                state.insertCssSurvivedWipe = results[0] && results[0].result;
+                resolve();
+              });
+          }, 500);
+        }),
+    );
+self.connectExternal = (targetId) => {
+  const port = chrome.runtime.connect(targetId, { name: 'x-port' });
+  self.crossPort = port;
+  port.onMessage.addListener((message) => {
+    state.crossPortReply = JSON.stringify(message);
+  });
+  port.postMessage({ hi: 1 });
+};
 
 chrome.cookies.onChanged.addListener(() => {
   state.cookieChanged++;

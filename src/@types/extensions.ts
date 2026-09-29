@@ -34,6 +34,9 @@ export interface ExtensionManifest {
   declarative_net_request?: {
     rule_resources?: { id?: string; enabled?: boolean; path?: string }[];
   };
+  /** Who may reach this extension's `runtime.onMessageExternal`/`onConnectExternal`: another
+   * extension by id, or a web page by match pattern (web page senders are not supported here). */
+  externally_connectable?: { ids?: string[]; matches?: string[] };
 }
 
 export interface ContentScriptEntry {
@@ -275,6 +278,11 @@ export interface PortEntry {
   peers: PortEndpoint[];
   /** Settled when the other side has been told about the port (messages wait for it). */
   ready: Promise<void>;
+  /**
+   * Set only for a `chrome.runtime.connect(targetId, ...)` port between two different extensions:
+   * the target's id, so it (not just `extension`, the caller) is allowed to post and disconnect too.
+   */
+  externalPeer?: string;
 }
 
 /** What an extension changed about its toolbar button. */

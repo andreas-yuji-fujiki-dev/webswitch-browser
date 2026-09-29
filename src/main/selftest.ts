@@ -5,6 +5,7 @@ import Gtk from 'gi://Gtk?version=4.0';
 import Soup from 'gi://Soup?version=3.0';
 import WebKit from 'gi://WebKit?version=6.0';
 import System from 'system';
+import { webStoreDetailId } from '~shared/crx';
 import { SETTINGS } from '~shared/settings-catalog';
 import { parseTheme } from '~shared/theme-format';
 import { convertVsCodeTheme, mergeIncluded, parseJsonc } from '~shared/vscode-theme';
@@ -106,7 +107,7 @@ function toplevelShot(window: Gtk.Window, name: string): void {
   );
 }
 async function scenario(context: BrowserContext): Promise<void> {
-  const { main, ui, tabs, history, shortcuts, menu, menuView, settings } = context;
+  const { main, ui, tabs, history, shortcuts, menu, menuView, settings, bookmarksPopup } = context;
   const ipc = <T>(expression: string): Promise<T> => evaluate(ui, expression) as Promise<T>;
   const state = () => tabs.getState();
   const activeView = () => {
@@ -177,6 +178,362 @@ async function scenario(context: BrowserContext): Promise<void> {
     'visit recorded in history',
     history.query('', 10).some((entry) => entry.url === `${SITE}/index.html`),
   );
+  // Bookmarks: the bar below the chrome, the star in the address bar, folders.
+  const bookmarkUrl = `${SITE}/index.html`;
+  const addedBookmark = await ipc<{ id: string; url: string }>(
+    `window.browserApi.bookmarks.add(${JSON.stringify(bookmarkUrl)}, 'Local Test Page', null)`,
+  );
+  check(
+    'bookmarks.add creates a bookmark',
+    addedBookmark.url === bookmarkUrl,
+    JSON.stringify(addedBookmark),
+  );
+  check(
+    'the bookmarks bar shows it',
+    await waitFor(
+      async () =>
+        (await ipc<number>("document.getElementById('bookmarks-bar').children.length")) === 1,
+    ),
+  );
+  check(
+    'the bar item shows the title',
+    (await ipc<string>(
+      "document.querySelector('.bookmark-item .bookmark-item__label')?.textContent ?? ''",
+    )) === 'Local Test Page',
+  );
+  check(
+    'the star fills in for a bookmarked page',
+    await waitFor(
+      async () =>
+        await ipc<boolean>(
+          "document.querySelector('.bookmark-star')?.classList.contains('is-active') ?? false",
+        ),
+    ),
+  );
+  const bookmarkFolder = await ipc<{ id: string; title: string }>(
+    "window.browserApi.bookmarks.addFolder('Test folder', null)",
+  );
+  check('bookmarks.addFolder creates a folder', bookmarkFolder.title === 'Test folder');
+  await ipc(
+    `window.browserApi.bookmarks.update(${JSON.stringify(addedBookmark.id)}, { folderId: ${JSON.stringify(bookmarkFolder.id)} })`,
+  );
+  check(
+    'moving the bookmark into a folder shows the folder in the bar instead',
+    await waitFor(
+      async () =>
+        (await ipc<string>(
+          "document.querySelector('.bookmark-item .bookmark-item__label')?.textContent ?? ''",
+        )) === 'Test folder',
+    ),
+  );
+  // A second top-level bookmark, pointing at a real local page (not a fake domain: a plain click
+  // on it below is a real navigation, not just an API call), so there is something real to
+  // drag-and-drop-reorder against the folder above too.
+  const secondBookmark = await ipc<{ id: string; title: string }>(
+    `window.browserApi.bookmarks.add(${JSON.stringify(`${SITE}/two.html`)}, 'Second Bookmark', null)`,
+  );
+  check(
+    'the bar shows the folder then the new bookmark, in that order',
+    await waitFor(async () => {
+      const labels = await ipc<string[]>(
+        "[...document.querySelectorAll('.bookmark-item .bookmark-item__label')].map(e => e.textContent)",
+      );
+      return JSON.stringify(labels) === JSON.stringify(['Test folder', 'Second Bookmark']);
+    }),
+  );
+  // A plain click (press and release with no real movement) must still navigate -- the user's
+  // own report was exactly that clicking became unreliable once dragging was added the first
+  // time (native HTML5 drag-and-drop, `draggable="true"`, since replaced by the Pointer Events
+  // implementation below, which this proves does not have the same problem). `pointerdown` and
+  // `pointerup` are dispatched first, to actually exercise the drag-tracking code on a real,
+  // no-movement press (not skip it), then a `click` -- real hardware input has the browser
+  // synthesize that itself after a pointerdown/up pair, which a manually dispatched pointerup
+  // alone does not do, so it is added explicitly here to still prove the click handler itself
+  // fires (and is not left suppressed by the drag-tracking code for a press that never dragged).
+  await ipc(
+    "(() => { const btn = [...document.querySelectorAll('.bookmark-item')].find(e => e.querySelector('.bookmark-item__label').textContent === 'Second Bookmark'); const r = btn.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; const fire = (t, Ctor = PointerEvent) => btn.dispatchEvent(new Ctor(t, { bubbles: true, cancelable: true, pointerId: 1, clientX: x, clientY: y, button: 0 })); fire('pointerdown'); fire('pointerup'); fire('click', MouseEvent); })()",
+  );
+  check(
+    'a plain click on a bar bookmark navigates there',
+    await waitFor(
+      () => state().tabs.find((tab) => tab.id === state().activeTabId)?.title === 'Page Two',
+    ),
+    JSON.stringify(state().tabs.find((tab) => tab.id === state().activeTabId)),
+  );
+  await ipc(`window.browserApi.navigation.navigate(${JSON.stringify(bookmarkUrl)})`);
+  await waitFor(
+    () => state().tabs.find((tab) => tab.id === state().activeTabId)?.title === 'Local Test Page',
+  );
+  // A real drag (Pointer Events, past the movement threshold, onto another bar item) must
+  // reorder the bar, and must *not* also fire a click on either end (no accidental navigation or
+  // folder-popup-opening from the same press-and-release that just moved something).
+  const urlBeforeDrag = state().tabs.find((tab) => tab.id === state().activeTabId)?.url;
+  // The trailing 'click' matters here, not just for realism: real hardware input has the browser
+  // fire one after a pointerdown/up pair regardless of movement in between, which is exactly what
+  // the drag-tracking code's own suppressClick exists to intercept -- without dispatching it here
+  // too, this check would prove nothing about that (there would be no click to suppress either way).
+  await ipc(
+    "(() => { const items = [...document.querySelectorAll('.bookmark-item')]; const from = items.find(e => e.querySelector('.bookmark-item__label').textContent === 'Test folder'); const to = items.find(e => e.querySelector('.bookmark-item__label').textContent === 'Second Bookmark'); const fr = from.getBoundingClientRect(), tr = to.getBoundingClientRect(); const sx = fr.left + fr.width / 2, sy = fr.top + fr.height / 2, ex = tr.left + tr.width / 2, ey = tr.top + tr.height / 2; const fire = (el, t, x, y, Ctor = PointerEvent) => el.dispatchEvent(new Ctor(t, { bubbles: true, cancelable: true, pointerId: 1, clientX: x, clientY: y, button: 0 })); fire(from, 'pointerdown', sx, sy); fire(from, 'pointermove', sx + 20, sy); fire(from, 'pointermove', ex, ey); fire(from, 'pointerup', ex, ey); fire(from, 'click', ex, ey, MouseEvent); })()",
+  );
+  check(
+    'a real drag (Pointer Events, past the threshold) reorders the bar',
+    await waitFor(async () => {
+      const labels = await ipc<string[]>(
+        "[...document.querySelectorAll('.bookmark-item .bookmark-item__label')].map(e => e.textContent)",
+      );
+      return JSON.stringify(labels) === JSON.stringify(['Second Bookmark', 'Test folder']);
+    }),
+  );
+  check(
+    'and the drag did not also navigate or open a popup as a spurious click',
+    state().tabs.find((tab) => tab.id === state().activeTabId)?.url === urlBeforeDrag &&
+      !bookmarksPopup.isOpen(),
+  );
+  // The folder's right-click menu (rename/delete): a real popover again, like the star's. A
+  // single check after one short, fixed wait (not a `waitFor` retry loop re-touching the view
+  // on every poll) -- a Gtk.Popover can dismiss itself (autohide) with no real pointer/focus to
+  // hold it open in this automated run, and re-evaluating in the gap between an isOpen() check
+  // and the evaluate() call landing was enough to hit exactly that race in an earlier version of
+  // this check (a real, reproduced crash, not a hypothetical).
+  await ipc(
+    `window.browserApi.bookmarks.openPopup('folder-menu', ${JSON.stringify(bookmarkFolder.id)}, 100, 100, 30, 30)`,
+  );
+  check('the folder-menu popover opens', await waitFor(() => bookmarksPopup.isOpen()));
+  await sleep(500);
+  if (bookmarksPopup.isOpen()) {
+    const folderMenuView = bookmarksPopup.view();
+    if (folderMenuView) {
+      const value = await evaluate(
+        folderMenuView,
+        "document.querySelector('.bm-popup__input')?.value ?? ''",
+      );
+      check(
+        'and shows the folder rename form, pre-filled with its current name',
+        value === 'Test folder',
+        String(value),
+      );
+      // "Add bookmark here…" / "Add folder here…": the user's own follow-up request, swapping
+      // this same already-open popover's content in place, same as the bar's own add-menu.
+      const rows = await evaluate(
+        folderMenuView,
+        "[...document.querySelectorAll('.bm-popup__row-label')].map(e => e.textContent)",
+      );
+      check(
+        'and offers to add a bookmark or a sub-folder inside it',
+        JSON.stringify(rows) === JSON.stringify(['Add bookmark here…', 'Add folder here…']),
+        JSON.stringify(rows),
+      );
+      await evaluate(folderMenuView, "[...document.querySelectorAll('.bm-popup__row')][1].click()");
+      if (bookmarksPopup.isOpen()) {
+        const header = await evaluate(
+          folderMenuView,
+          "document.querySelector('.bm-popup__header')?.textContent ?? ''",
+        );
+        check('switching to the new-folder form', header === 'New folder', String(header));
+        await evaluate(
+          folderMenuView,
+          "document.querySelector('.bm-popup__input').value = 'Sub-folder'",
+        );
+        await evaluate(
+          folderMenuView,
+          "document.querySelector('.bm-popup__button--primary').click()",
+        );
+      }
+    }
+    if (bookmarksPopup.isOpen()) bookmarksPopup.close();
+  } else {
+    console.log('info: the folder-menu popover closed itself before its content could be read');
+  }
+  // The sub-folder just created inside "Test folder" must show up when browsing its contents
+  // (left click, `kind: 'folder'`), or it would be created but stay unreachable.
+  await ipc(
+    `window.browserApi.bookmarks.openPopup('folder', ${JSON.stringify(bookmarkFolder.id)}, 100, 100, 30, 30)`,
+  );
+  await sleep(500);
+  if (bookmarksPopup.isOpen()) {
+    const contentsView = bookmarksPopup.view();
+    if (contentsView) {
+      const rows = await evaluate(
+        contentsView,
+        "[...document.querySelectorAll('.bm-popup__row-label')].map(e => e.textContent)",
+      );
+      check(
+        'the sub-folder created from the right-click menu shows up inside its parent',
+        (rows as string[]).includes('Sub-folder'),
+        JSON.stringify(rows),
+      );
+    }
+    bookmarksPopup.close();
+  } else {
+    console.log('info: the folder-contents popover closed itself before its content could be read');
+  }
+  await ipc(
+    `window.browserApi.bookmarks.renameFolder(${JSON.stringify(bookmarkFolder.id)}, 'Renamed folder')`,
+  );
+  check(
+    "renameFolder (what the popover's Save button calls) renames it in the bar",
+    await waitFor(async () => {
+      const labels = await ipc<string[]>(
+        "[...document.querySelectorAll('.bookmark-item .bookmark-item__label')].map(e => e.textContent)",
+      );
+      return labels.includes('Renamed folder');
+    }),
+  );
+  // A bar bookmark's own right-click menu edits that specific bookmark, not whatever the active
+  // tab happens to be on (the active tab here is still SITE/index.html, a different bookmark
+  // entirely, so this also proves the popup is really looking the id up, not falling back).
+  await ipc(
+    `window.browserApi.bookmarks.openPopup('bookmark', ${JSON.stringify(secondBookmark.id)}, 100, 100, 30, 30)`,
+  );
+  check('the bookmark right-click popover opens', await waitFor(() => bookmarksPopup.isOpen()));
+  await sleep(500);
+  if (bookmarksPopup.isOpen()) {
+    const bookmarkMenuView = bookmarksPopup.view();
+    if (bookmarkMenuView) {
+      const header = await evaluate(
+        bookmarkMenuView,
+        "document.querySelector('.bm-popup__header')?.textContent ?? ''",
+      );
+      const name = await evaluate(
+        bookmarkMenuView,
+        "document.querySelector('.bm-popup__input')?.value ?? ''",
+      );
+      check(
+        "and edits that specific bookmark (not the active tab's)",
+        header === 'Edit bookmark' && name === 'Second Bookmark',
+        JSON.stringify({ header, name }),
+      );
+    }
+    await ipc('window.browserApi.bookmarks.closePopup()');
+  } else {
+    console.log('info: the bookmark popover closed itself before its content could be read');
+  }
+  await ipc(`window.browserApi.bookmarks.remove(${JSON.stringify(secondBookmark.id)})`);
+  // Right-click on the bar's own empty space (not an item): the "add by hand" menu the user
+  // asked for. Dispatched straight on the bar element itself, which is what a right-click on the
+  // empty space past the last item would also hit (its own listener checks event.target, not
+  // hit-testing, so this is the same path a real one takes once it reaches the container).
+  await ipc(
+    "document.getElementById('bookmarks-bar').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }))",
+  );
+  check('the add-by-hand menu opens', await waitFor(() => bookmarksPopup.isOpen()));
+  await sleep(400);
+  if (bookmarksPopup.isOpen()) {
+    const addMenuView = bookmarksPopup.view();
+    if (addMenuView) {
+      const rows = await evaluate(
+        addMenuView,
+        "[...document.querySelectorAll('.bm-popup__row-label')].map(e => e.textContent)",
+      );
+      check(
+        'offering to add a bookmark or a folder by hand',
+        JSON.stringify(rows) === JSON.stringify(['New bookmark…', 'New folder…']),
+        JSON.stringify(rows),
+      );
+      // Choosing "New folder…" swaps the same popover's own content in place (no new native
+      // round trip), straight to a name field.
+      await evaluate(addMenuView, "[...document.querySelectorAll('.bm-popup__row')][1].click()");
+      if (bookmarksPopup.isOpen()) {
+        const header = await evaluate(
+          addMenuView,
+          "document.querySelector('.bm-popup__header')?.textContent ?? ''",
+        );
+        check('and switches to the new-folder form', header === 'New folder', String(header));
+        await evaluate(
+          addMenuView,
+          "document.querySelector('.bm-popup__input').value = 'Hand-made folder'",
+        );
+        await evaluate(addMenuView, "document.querySelector('.bm-popup__button--primary').click()");
+      }
+    }
+  } else {
+    console.log('info: the add-by-hand popover closed itself before its content could be read');
+  }
+  check(
+    'creating a folder by hand from that form adds it to the bar',
+    await waitFor(async () => {
+      const labels = await ipc<string[]>(
+        "[...document.querySelectorAll('.bookmark-item .bookmark-item__label')].map(e => e.textContent)",
+      );
+      return labels.includes('Hand-made folder');
+    }),
+  );
+  const handMadeFolder = (
+    await ipc<{ folders: { id: string; title: string }[] }>('window.browserApi.bookmarks.get()')
+  ).folders.find((folder) => folder.title === 'Hand-made folder');
+  if (handMadeFolder) await ipc(`window.browserApi.bookmarks.removeFolder('${handMadeFolder.id}')`);
+  // The "Only show the bookmarks bar on the home page" setting: we are on SITE/index.html here,
+  // not the home page (a blank tab, url === ''), so turning it on should hide the bar even
+  // though it still has the folder in it from the check just above.
+  await ipc("window.browserApi.settings.set('bookmarksBarHomeOnly', true)");
+  check(
+    'the bookmarks-bar-on-home-page-only setting hides the bar on a real page',
+    await waitFor(
+      async () => await ipc<boolean>("document.getElementById('bookmarks-bar').hidden"),
+    ),
+  );
+  await ipc("window.browserApi.settings.set('bookmarksBarHomeOnly', false)");
+  check(
+    'turning it back off shows the bar again',
+    await waitFor(
+      async () => !(await ipc<boolean>("document.getElementById('bookmarks-bar').hidden")),
+    ),
+  );
+  await ipc(`window.browserApi.bookmarks.remove(${JSON.stringify(addedBookmark.id)})`);
+  await ipc(`window.browserApi.bookmarks.removeFolder(${JSON.stringify(bookmarkFolder.id)})`);
+  check(
+    'removing everything hides the bar again',
+    await waitFor(
+      async () => await ipc<boolean>("document.getElementById('bookmarks-bar').hidden"),
+    ),
+  );
+  check(
+    'the star empties out again',
+    await waitFor(
+      async () =>
+        !(await ipc<boolean>(
+          "document.querySelector('.bookmark-star')?.classList.contains('is-active') ?? true",
+        )),
+    ),
+  );
+  // The native Gtk.Popover (bookmarks-popup.ts): a window screenshot does not show it (it is its
+  // own surface, the same reason an extension's own popup was never seen in one either), so this
+  // reads its actual state and content straight from the widget and its own WebKit view instead.
+  await ipc("window.browserApi.bookmarks.openPopup('star', null, 100, 100, 30, 30)");
+  check(
+    'the star popover opens as a real Gtk.Popover',
+    await waitFor(() => bookmarksPopup.isOpen()),
+  );
+  // A Gtk.Popover can dismiss itself (autohide) with no real pointer/focus to hold it open in
+  // this automated run, so every step below re-checks isOpen() before touching the view again
+  // rather than assuming it is still there.
+  const popoverView = bookmarksPopup.isOpen() ? bookmarksPopup.view() : null;
+  check('it has its own WebKit view', popoverView !== null);
+  if (popoverView && bookmarksPopup.isOpen()) {
+    await sleep(500);
+    if (bookmarksPopup.isOpen()) {
+      const header = await evaluate(
+        popoverView,
+        "document.querySelector('.bm-popup__header')?.textContent ?? ''",
+      );
+      check(
+        'and loads the popup UI, showing the star form',
+        header === 'Bookmark added' || header === 'Edit bookmark',
+        String(header),
+      );
+      if (bookmarksPopup.isOpen()) {
+        // A snapshot of a view hosted in a Gtk.Popover is not always available right away;
+        // this is a diagnostic aid, not a functional check, so a failure here is not fatal.
+        await screenshot(popoverView, 'bookmarks-star-popup').catch((error: unknown) => {
+          console.log(`info: could not screenshot the popover: ${String(error)}`);
+        });
+      }
+    } else {
+      console.log('info: the bookmarks popover closed itself before its content could be read');
+    }
+  }
+  if (bookmarksPopup.isOpen()) await ipc('window.browserApi.bookmarks.closePopup()');
+  check('the popover ends up closed', await waitFor(() => !bookmarksPopup.isOpen()));
   await screenshot(ui, 'ui-page');
   await screenshot(activeView(), 'tab-page');
   windowShot(context, 'window-page');
@@ -241,6 +598,104 @@ async function scenario(context: BrowserContext): Promise<void> {
   check('a real Ctrl+T key event opens a tab', state().tabs.length === beforeKey + 1);
   press(Gdk.KEY_w, Gdk.ModifierType.CONTROL_MASK);
   check('a real Ctrl+W key event closes it', state().tabs.length === beforeKey);
+
+  // Pin, mute and reorder (added 2026-09-29 on request). Pinning groups a tab at the front of the
+  // strip and gives it a narrow, icon-only tile; muting flips WebKit's own `view.is_muted`, not a
+  // separate flag kept here; reordering drags a tab to a new position, with the native side always
+  // keeping the pinned group first regardless of what the drag sends (CLAUDE.md §5: the native side
+  // stays the single source of truth for that rule, not just a convention the renderer keeps).
+  const pinA = tabs.createTab(`${SITE}/index.html`);
+  const pinB = tabs.createTab(`${SITE}/two.html`);
+  await waitFor(() => state().activeTabId === pinB);
+  const freshPinB = state().tabs.find((tab) => tab.id === pinB);
+  check(
+    'a new tab starts unpinned and unmuted',
+    freshPinB !== undefined && !freshPinB.pinned && !freshPinB.muted,
+  );
+  await ipc(`window.browserApi.tabs.setPinned(${String(pinB)}, true)`);
+  check(
+    'pinning moves the tab to the front of the strip',
+    await waitFor(() => state().tabs[0]?.id === pinB && state().tabs[0]?.pinned === true),
+    JSON.stringify(state().tabs.map((tab) => [tab.id, tab.pinned])),
+  );
+  await ipc(`window.browserApi.tabs.setPinned(${String(pinA)}, true)`);
+  check(
+    'pinning a second tab keeps both grouped at the front, in pin order',
+    state().tabs[0]?.id === pinB && state().tabs[1]?.id === pinA,
+    JSON.stringify(state().tabs.map((tab) => tab.id)),
+  );
+  await ipc(`window.browserApi.tabs.setPinned(${String(pinB)}, false)`);
+  check(
+    'unpinning moves it to just after the remaining pinned tabs, not back to its old spot',
+    state().tabs[0]?.id === pinA && state().tabs[1]?.id === pinB,
+    JSON.stringify(state().tabs.map((tab) => tab.id)),
+  );
+  await ipc(`window.browserApi.tabs.setMuted(${String(pinB)}, true)`);
+  check(
+    'muting a tab is reported back through the state',
+    await waitFor(() => state().tabs.find((tab) => tab.id === pinB)?.muted === true),
+  );
+  await ipc(`window.browserApi.tabs.setMuted(${String(pinB)}, false)`);
+  check(
+    'unmuting clears it',
+    await waitFor(() => state().tabs.find((tab) => tab.id === pinB)?.muted === false),
+  );
+  await ipc(`window.browserApi.tabs.setPinned(${String(pinA)}, false)`);
+  const reversed = [...state().tabs.map((tab) => tab.id)].reverse();
+  await ipc(`window.browserApi.tabs.reorder(${JSON.stringify(reversed)})`);
+  check(
+    'reorder(order) applies a full new order',
+    await waitFor(
+      () => JSON.stringify(state().tabs.map((tab) => tab.id)) === JSON.stringify(reversed),
+    ),
+    JSON.stringify(state().tabs.map((tab) => tab.id)),
+  );
+  await ipc(`window.browserApi.tabs.setPinned(${String(pinB)}, true)`);
+  const wrongOrder = state()
+    .tabs.map((tab) => tab.id)
+    .filter((id) => id !== pinB)
+    .concat(pinB);
+  await ipc(`window.browserApi.tabs.reorder(${JSON.stringify(wrongOrder)})`);
+  check(
+    'a reorder cannot pull a pinned tab out of the pinned group even if the order sent asks for that',
+    await waitFor(() => state().tabs[0]?.id === pinB),
+    JSON.stringify(state().tabs.map((tab) => [tab.id, tab.pinned])),
+  );
+  await ipc(`window.browserApi.tabs.setPinned(${String(pinB)}, false)`);
+  // A real click on the pin button (not just the IPC call above) must toggle it and must *not*
+  // also activate the tab -- the button's own click handler stops propagation before the tab
+  // root's click-to-activate handler ever sees the event.
+  const activeBeforePinClick = state().activeTabId;
+  await ipc(
+    `(() => { const btn = document.querySelector('.tab[data-tab-id="${String(pinA)}"] .tab__pin'); const r = btn.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2; const fire = (t, Ctor = PointerEvent) => btn.dispatchEvent(new Ctor(t, { bubbles: true, cancelable: true, pointerId: 1, clientX: x, clientY: y, button: 0 })); fire('pointerdown'); fire('pointerup'); fire('click', MouseEvent); })()`,
+  );
+  check(
+    'a real click on the pin button pins the tab and does not also activate it',
+    (await waitFor(() => state().tabs.find((tab) => tab.id === pinA)?.pinned === true)) &&
+      state().activeTabId === activeBeforePinClick,
+    JSON.stringify(state().tabs.map((tab) => [tab.id, tab.pinned])),
+  );
+  await ipc(`window.browserApi.tabs.setPinned(${String(pinA)}, false)`);
+  // A real drag (Pointer Events, past the movement threshold) between two ordinary tabs, with a
+  // trailing click the way real hardware input fires one after a pointerdown/up pair regardless of
+  // movement -- the same check the bookmarks bar's own drag test makes, and for the same reason:
+  // this is exactly what an earlier version of that drag code got wrong (the suppressor was a
+  // second listener added too late to run before the click handler already registered; see
+  // CLAUDE.md's `bookmarks` entry), so it is worth proving independently here too, not just by
+  // structural similarity to that already-fixed code.
+  const activeBeforeDrag = state().activeTabId;
+  await ipc(
+    `(() => { const from = document.querySelector('.tab[data-tab-id="${String(pinA)}"]'); const to = document.querySelector('.tab[data-tab-id="${String(pinB)}"]'); const fr = from.getBoundingClientRect(), tr = to.getBoundingClientRect(); const sx = fr.left + fr.width / 2, sy = fr.top + fr.height / 2, ex = tr.left + tr.width / 2, ey = tr.top + tr.height / 2; const fire = (el, t, x, y, Ctor = PointerEvent) => el.dispatchEvent(new Ctor(t, { bubbles: true, cancelable: true, pointerId: 1, clientX: x, clientY: y, button: 0 })); fire(from, 'pointerdown', sx, sy); fire(from, 'pointermove', sx + 20, sy); fire(from, 'pointermove', ex, ey); fire(from, 'pointerup', ex, ey); fire(from, 'click', ex, ey, MouseEvent); })()`,
+  );
+  check(
+    'a real drag on the strip reorders it, and the trailing click activates nothing new',
+    (await waitFor(() => state().tabs[0]?.id === pinB && state().tabs[1]?.id === pinA)) &&
+      state().activeTabId === activeBeforeDrag,
+    JSON.stringify(state().tabs.map((tab) => tab.id)),
+  );
+  tabs.closeTab(pinA);
+  tabs.closeTab(pinB);
+
   press(Gdk.KEY_ISO_Left_Tab, Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK);
   press(Gdk.KEY_Tab, Gdk.ModifierType.CONTROL_MASK);
   check(
@@ -1551,6 +2006,10 @@ async function scenario(context: BrowserContext): Promise<void> {
       async () => (await ipc("document.querySelectorAll('.set-row').length")) === SETTINGS.length,
     ),
   );
+  check(
+    'the star is hidden on a built-in page (Settings)',
+    await ipc<boolean>("document.querySelector('.bookmark-star')?.hidden ?? true"),
+  );
   await sleep(400);
   press(Gdk.KEY_F12, 0);
   check(
@@ -1965,6 +2424,29 @@ async function extensionsScenario(context: BrowserContext): Promise<void> {
   const dataset = (view: WebKit.WebView, key: string) =>
     evaluate(view, `document.documentElement.dataset.${key} ?? null`);
   const site = `${SITE}/index.html`;
+  // Pure, offline: whether a URL is one extension's own page on the real Chrome Web Store, the
+  // one thing that decides whether the toolbar's "Install in Webswitch" button can appear.
+  check(
+    'webStoreDetailId reads the id off a real store detail address',
+    webStoreDetailId(
+      'https://chromewebstore.google.com/detail/some-name/ddkjiahejlhfcafbddmgiahcphecmpfh',
+    ) === 'ddkjiahejlhfcafbddmgiahcphecmpfh',
+  );
+  check(
+    'and off the older chrome.google.com/webstore address',
+    webStoreDetailId(
+      'https://chrome.google.com/webstore/detail/some-name/ddkjiahejlhfcafbddmgiahcphecmpfh',
+    ) === 'ddkjiahejlhfcafbddmgiahcphecmpfh',
+  );
+  check(
+    "but not the store's own search or home page",
+    webStoreDetailId('https://chromewebstore.google.com/') === null &&
+      webStoreDetailId('https://chromewebstore.google.com/category/extensions') === null,
+  );
+  check(
+    'and not an unrelated page that happens to have an id-shaped word in its address',
+    webStoreDetailId('https://example.com/detail/x/ddkjiahejlhfcafbddmgiahcphecmpfh') === null,
+  );
   check('extensions are off by default', !extensions.getState().enabled);
   tabs.openPage('extensions');
   await sleep(1500);
@@ -2059,6 +2541,18 @@ async function extensionsScenario(context: BrowserContext): Promise<void> {
     "getComputedStyle(document.querySelector('h1')).outlineColor + ' ' + getComputedStyle(document.querySelector('h1')).outlineStyle",
   );
   check('the content style applies', outline === 'rgb(1, 2, 3) solid', String(outline));
+  const contentCss = await evaluate(
+    view,
+    `(() => { const s = [...document.querySelectorAll('style')].find((el) => el.textContent.includes('ws-content-css-test')); return s ? s.textContent : null; })()`,
+  );
+  check(
+    "content_scripts' own css resolves __MSG_@@extension_id__ and a relative url() against the" +
+      ' extension, and leaves a fragment-only url(#id) alone (2026-09-29 fix)',
+    typeof contentCss === 'string' &&
+      contentCss.includes(`url(webswitch-ext://${id}/fake-font.ttf)`) &&
+      contentCss.includes('url(#ws-fragment-only)'),
+    String(contentCss),
+  );
   check(
     'the page itself cannot see the extension API',
     (await evaluate(
@@ -2128,6 +2622,13 @@ async function extensionsScenario(context: BrowserContext): Promise<void> {
       closed?: number;
       ownPage?: string;
       ownPageTabId?: number;
+      crossReply?: string;
+      crossPortReply?: string;
+      mhtmlType?: string;
+      mhtmlLength?: number;
+      mhtmlLooksRight?: boolean;
+      insertCssUrls?: string;
+      insertCssSurvivedWipe?: boolean;
     };
   };
   check(
@@ -2300,6 +2801,110 @@ async function extensionsScenario(context: BrowserContext): Promise<void> {
   );
   tabs.closeTab(ownTabId);
   tabs.activateTab(tabs.idOfView(view) ?? 0);
+  // Cross-extension messaging (chrome.runtime.sendMessage/.connect(targetId, ...),
+  // runtime.onMessageExternal/onConnectExternal): a second extension, `peer`, whose manifest
+  // names `hello`'s real id (only known now that hello is installed) in
+  // externally_connectable.ids — patched into a temp copy, since the checked-in fixture only
+  // carries a placeholder (no fixture can hard-code an id that depends on where it is checked out).
+  const peerSrc = fixture('peer');
+  const peerDir = GLib.dir_make_tmp('ws-peer-XXXXXX');
+  const [, peerManifestBytes] = GLib.file_get_contents(
+    GLib.build_filenamev([peerSrc, 'manifest.json']),
+  );
+  GLib.file_set_contents(
+    GLib.build_filenamev([peerDir, 'manifest.json']),
+    new TextDecoder().decode(peerManifestBytes).replace('__HELLO_ID__', id),
+  );
+  const [, peerBgBytes] = GLib.file_get_contents(GLib.build_filenamev([peerSrc, 'bg.js']));
+  GLib.file_set_contents(GLib.build_filenamev([peerDir, 'bg.js']), peerBgBytes);
+  const preparedPeer = await extensions.prepareFromFolder(peerDir);
+  const confirmedPeer = preparedPeer.ok
+    ? await extensions.confirm()
+    : { ok: false as const, error: 'peer fixture was refused' };
+  check(
+    'the peer fixture (externally_connectable) installs',
+    confirmedPeer.ok,
+    JSON.stringify(preparedPeer),
+  );
+  const peerId = confirmedPeer.ok ? confirmedPeer.id : '';
+  const peerState = async () => {
+    const raw = await extensionRuntime.evaluateInBackground(peerId, 'JSON.stringify(state)');
+    return JSON.parse(raw) as {
+      messages?: { message: unknown; senderId: string }[];
+      ports?: (string | null)[];
+      portMessages?: unknown[];
+      helloReply?: string;
+    };
+  };
+  await extensionRuntime.evaluateInBackground(id, `messageExternal(${JSON.stringify(peerId)}); 0`);
+  check(
+    'chrome.runtime.sendMessage(targetId, ...) reaches the target and its onMessageExternal answers',
+    await waitFor(async () => String((await backgroundState()).crossReply).includes('"ok":true')),
+    String((await backgroundState()).crossReply),
+  );
+  check(
+    "the target's sender.id in onMessageExternal names the calling extension",
+    await waitFor(async () =>
+      ((await peerState()).messages ?? []).some((entry) => entry.senderId === id),
+    ),
+    JSON.stringify(await peerState()),
+  );
+  await extensionRuntime.evaluateInBackground(id, `connectExternal(${JSON.stringify(peerId)}); 0`);
+  check(
+    'chrome.runtime.connect(targetId, ...) reaches the target, whose onConnectExternal answers on the port',
+    await waitFor(async () =>
+      String((await backgroundState()).crossPortReply).includes('"echo":{"hi":1}'),
+    ),
+    String((await backgroundState()).crossPortReply),
+  );
+  await extensionRuntime.evaluateInBackground(peerId, `tryMessageHello(${JSON.stringify(id)}); 0`);
+  check(
+    'a target that never declared externally_connectable refuses a message from another extension',
+    await waitFor(async () => (await peerState()).helloReply === 'undefined'),
+    String((await peerState()).helloReply),
+  );
+  // Done with it: removed now, like the blocker fixture is removed after its own checks, so the
+  // extension count later in this scenario ("removing works") only has to account for `hello`.
+  if (confirmedPeer.ok) extensions.remove(confirmedPeer.id);
+  await extensionRuntime.evaluateInBackground(id, 'captureMhtml(); 0');
+  check(
+    "chrome.pageCapture.saveAsMHTML saves the tab's page with WebKit's own MHTML writer",
+    await waitFor(async () => (await backgroundState()).mhtmlLooksRight === true),
+    JSON.stringify({
+      type: (await backgroundState()).mhtmlType,
+      length: (await backgroundState()).mhtmlLength,
+    }),
+  );
+  await extensionRuntime.evaluateInBackground(
+    id,
+    `insertCssFile(${JSON.stringify(tabs.idOfView(view))}); 0`,
+  );
+  check(
+    'chrome.scripting.insertCSS({files}) resolves a root-relative url() against the extension' +
+      ", not the page (2026-09-29 fix), and leaves a fragment-only url(#id) (an SVG filter's own" +
+      ' reference into the page) alone',
+    await waitFor(async () => {
+      const css = (await backgroundState()).insertCssUrls;
+      return (
+        typeof css === 'string' &&
+        css.includes(`url(webswitch-ext://${id}/fonts/fake.ttf)`) &&
+        css.includes('url(#ws-fragment-only)')
+      );
+    }),
+    String((await backgroundState()).insertCssUrls),
+  );
+  await extensionRuntime.evaluateInBackground(
+    id,
+    `insertCssSurvivesWipe(${JSON.stringify(tabs.idOfView(view))}); 0`,
+  );
+  check(
+    'chrome.scripting.insertCSS survives the injected page later replacing' +
+      ' document.documentElement.innerHTML wholesale (2026-09-29 fix, a real bug: Mobile' +
+      " Simulator's own startup script does exactly this to its own page right after inserting" +
+      ' its styles, silently losing them every time before the fix)',
+    await waitFor(async () => (await backgroundState()).insertCssSurvivedWipe === true),
+    String((await backgroundState()).insertCssSurvivedWipe),
+  );
   check(
     'an offscreen document is made, answers the background page, and is listed as a context',
     (await waitFor(async () =>
@@ -2402,9 +3007,39 @@ async function extensionsScenario(context: BrowserContext): Promise<void> {
 }
 /** Opt-in, and it asks Google: installs one real extension from the Chrome Web Store and looks at it. */
 async function storeScenario(context: BrowserContext): Promise<void> {
-  const { extensions, settings, tabs } = context;
+  const { extensions, settings, tabs, ui } = context;
   settings.set('extensions', true);
   const wanted = GLib.getenv('WEBSWITCH_SELFTEST_STORE_ID') ?? 'ddkjiahejlhfcafbddmgiahcphecmpfh';
+
+  // The Extensions page's "Search the Chrome Web Store" button, through the real UI -> IPC path.
+  await waitFor(() => !ui.is_loading && (ui.get_uri() ?? '').startsWith('webswitch://ui/'));
+  await sleep(1200);
+  const before = new Set(tabs.getState().tabs.map((tab) => tab.id));
+  await evaluate(ui, 'window.browserApi.extensions.openStore()');
+  await sleep(500);
+  const storeTabId = tabs.getState().tabs.find((tab) => !before.has(tab.id))?.id ?? -1;
+  const storeView = tabs.viewOfTab(storeTabId);
+  check(
+    'the Search the Chrome Web Store button opens a tab at the real store',
+    storeView !== null &&
+      (await waitFor(() =>
+        (storeView?.get_uri() ?? '').startsWith('https://chromewebstore.google.com/'),
+      )),
+    String(storeView?.get_uri()),
+  );
+  // A real extension's own page on the store: the toolbar's install button should be able to find
+  // it (Tab.storeId), the same way it would for whatever the user actually browsed to.
+  tabs.loadUrl(storeTabId, `https://chromewebstore.google.com/detail/x/${wanted}`);
+  await waitFor(() => !(tabs.viewOfTab(storeTabId)?.is_loading ?? true));
+  await sleep(1500);
+  const detailState = tabs.getState().tabs.find((tab) => tab.id === storeTabId);
+  check(
+    "a real extension's own page on the store sets Tab.storeId, so the install button can appear",
+    detailState?.storeId === wanted,
+    JSON.stringify(detailState?.storeId),
+  );
+  tabs.closeTab(storeTabId);
+
   const result = await extensions.prepareFromStore(
     `https://chromewebstore.google.com/detail/x/${wanted}`,
   );
@@ -2577,6 +3212,41 @@ async function storeScenario(context: BrowserContext): Promise<void> {
         );
         await screenshot(popup, 'extension-popup');
       } else console.log('popup: not open');
+    }
+    // Regression check for a real bug report ("Responsive Viewer does nothing"), root-caused by
+    // hand against the extension's own real background.js: it has no popup, so a click fires
+    // action.onClicked, which builds declarativeNetRequest rules using chrome.declarativeNetRequest
+    // .HeaderOperation (missing from the shim entirely — a plain property-access TypeError, thrown
+    // synchronously deep in the extension's own rule builder, silently swallowed by its own
+    // Promise.all/.catch chain with no console output at all) and then, once that no longer throws,
+    // waits for chrome.webNavigation.onCommitted to tell it the (reloaded) tab's own url so it can
+    // check the hostname before injecting — which `seen()` above was withholding because this
+    // extension has only `activeTab`, not `tabs` or host_permissions, and activeTab was not one of
+    // the ways `seen()` would let the url through (real Chrome's webNavigation API does honor
+    // activeTab for this). Both fixed in this same change; verified here end to end with the real
+    // extension: a real click makes its real UI (`RESPONSIVE-VIEWER-ROOT`) actually appear.
+    if (GLib.getenv('WEBSWITCH_SELFTEST_STORE_POPUP') === 'responsive') {
+      const target = tabs.createTab(
+        GLib.getenv('WEBSWITCH_SELFTEST_RV_URL') ?? `${SITE}/index.html`,
+      );
+      const targetView = tabs.viewOfTab(target);
+      if (targetView) {
+        await sleep(3e3);
+        await context.extensionRuntime.openPopup(wanted, { x: 900, y: 30, width: 30, height: 30 });
+        let root = false;
+        for (let second = 1; second <= 8 && !root; second++) {
+          await sleep(1e3);
+          root = Boolean(
+            await evaluate(targetView, "!!document.getElementById('RESPONSIVE-VIEWER-ROOT')"),
+          );
+        }
+        check(
+          "a click on Responsive Viewer's toolbar button (it has no popup) injects its real UI",
+          root,
+        );
+        await sleep(6e3);
+        await screenshot(targetView, 'responsive-viewer-after-click');
+      }
     }
     extensions.remove(wanted);
   }
