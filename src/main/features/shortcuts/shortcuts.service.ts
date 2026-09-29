@@ -28,6 +28,8 @@ export class ShortcutsService {
   private recording = false;
   private lastAccelerator = '';
   private lastAt = 0;
+  /** Shortcuts that extensions asked for; asked when no browser action has the key. */
+  private extra: ((accelerator: string, repeated: boolean) => boolean) | null = null;
 
   constructor(
     private readonly actions: ShortcutActions,
@@ -37,6 +39,10 @@ export class ShortcutsService {
     keybindings.onChanged((state) => {
       this.rebuild(state);
     });
+  }
+
+  setExtraShortcuts(handler: (accelerator: string, repeated: boolean) => boolean): void {
+    this.extra = handler;
   }
 
   /** While the Keybindings page records a new key combination, no shortcut may fire. */
@@ -71,7 +77,7 @@ export class ShortcutsService {
       return true;
     }
     const id = this.lookup.get(accelerator);
-    if (id === undefined) return false;
+    if (id === undefined) return this.extra?.(accelerator, repeated) ?? false;
     if (!repeated) this.actions[id]();
     return true;
   }

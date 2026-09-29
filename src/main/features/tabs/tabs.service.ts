@@ -4,7 +4,10 @@ import type Gtk from 'gi://Gtk?version=4.0';
 import WebKit from 'gi://WebKit?version=6.0';
 import { debug } from '../../core/debug';
 import { isWebUrl, parseUrl } from '../../core/url';
+import { webStoreDetailId } from '~shared/crx';
+import type { EmbedSpec } from '~types/browsers';
 import type { Unsubscribe } from '~types/common';
+import type { TabBrief } from '~types/extensions';
 import type {
   CreateTabOptions,
   InternalPage,
@@ -30,6 +33,11 @@ const PAGE_TITLES: Record<InternalPage, string> = {
   keybindings: 'Keybindings',
   history: 'History',
   cookies: 'Cookies',
+  settings: 'General settings',
+  themes: 'Themes',
+  browsers: 'Test in other browsers',
+  'dev-settings': 'Dev settings',
+  extensions: 'Extensions',
 };
 // A `create` handler that refuses to open a window returns NULL, which the typings do not allow.
 const NO_WINDOW = null as unknown as Gtk.Widget;
@@ -89,6 +97,7 @@ export class TabsService {
       page: options.page ?? null,
       zoomIndex: DEFAULT_ZOOM_INDEX,
       embed: null,
+      pinned: false,
     };
     this.tabs.set(tab.id, tab);
     this.deps.stack.add_named(view, String(tab.id));
@@ -158,6 +167,62 @@ export class TabsService {
     if (next !== undefined) this.activateTab(next);
   }
 
+  /** Debugging: a command for the X11 helper of the active tab's embedded window. */
+  probeEmbed(line: string): Promise<string> {
+    return this.getActiveTab()?.embed?.handle.probe(line) ?? Promise.resolve('no embedded window');
+  }
+
+  /** Runs `apply` on every tab's web view (settings that change while the browser runs). */
+  forEachView(apply: (view: WebKit.WebView) => void): void {
+    for (const tab of this.tabs.values()) apply(tab.view);
+  }
+
+  /** The tabs as an extension may see them (the ones that show a web page). */
+  briefs(): TabBrief[] {
+    return [...this.tabs.values()]
+      .filter((tab) => tab.page === null)
+      .map((tab, index) => {
+        const state = this.snapshot(tab);
+        return {
+          id: tab.id,
+          url: state.url,
+          title: state.title,
+          active: tab.id === this.activeTabId,
+          index,
+          windowId: 1,
+        };
+      });
+  }
+
+  /** The addresses of tabs closed recently, newest first. */
+  recentlyClosed(): string[] {
+    return [...this.closedUrls].reverse();
+  }
+
+  idOfView(view: WebKit.WebView): number | null {
+    return [...this.tabs.values()].find((tab) => tab.view === view)?.id ?? null;
+  }
+
+  /** The page itself answered, just with an error status: shown instead of the server's own page.
+   * `url` is passed in rather than read from the view, whose own URI has not committed yet at the
+   * point (response headers received) this is reported from. */
+  reportHttpError(view: WebKit.WebView, url: string, status: number): void {
+    const tab = [...this.tabs.values()].find((entry) => entry.view === view);
+    if (!tab) return;
+    tab.failedUrl = url;
+    tab.error = { code: status, description: `HTTP ${String(status)}`, httpStatus: status };
+    this.scheduleNotify();
+  }
+
+  viewOfTab(id: number): WebKit.WebView | null {
+    const tab = this.tabs.get(id);
+    return tab?.page === null ? tab.view : null;
+  }
+
+  reloadTab(id: number): void {
+    this.viewOfTab(id)?.reload();
+  }
+
   /** Shows a built-in page, reusing the tab that already shows it. */
   openPage(page: InternalPage): void {
     const existing = [...this.tabs.values()].find((tab) => tab.page === page);
@@ -171,6 +236,50 @@ export class TabsService {
   reopenClosedTab(): void {
     const url = this.closedUrls.pop();
     if (url !== undefined) this.createTab(url);
+  }
+
+  /** Pinning or unpinning moves the tab to the boundary between the two groups -- the last pinned
+   * position when pinning, the first unpinned position when unpinning -- the same spot either way,
+   * matching Chrome: a tab does not keep its old position once its group changes. */
+  setPinned(id: number, pinned: boolean): void {
+    const tab = this.tabs.get(id);
+    if (!tab || tab.pinned === pinned) return;
+    tab.pinned = pinned;
+    const rest = [...this.tabs.keys()].filter((tabId) => tabId !== id);
+    const boundary = rest.filter((tabId) => this.tabs.get(tabId)?.pinned === true).length;
+    rest.splice(boundary, 0, id);
+    this.reorderMap(rest);
+    this.scheduleNotify();
+  }
+
+  setMuted(id: number, muted: boolean): void {
+    const tab = this.tabs.get(id);
+    if (tab) tab.view.is_muted = muted;
+  }
+
+  /** A full new order from a drag in the tab strip. Pinned tabs are still grouped first regardless
+   * of what the UI sends -- `TabsService` stays the single source of truth for that rule (CLAUDE.md
+   * §5), not just a convention the renderer is trusted to keep. */
+  reorderTabs(order: number[]): void {
+    const known = new Set(this.tabs.keys());
+    const wanted = order.filter((id) => known.has(id));
+    // Anything the caller left out (should not normally happen) keeps its relative place at the end.
+    for (const id of this.tabs.keys()) if (!wanted.includes(id)) wanted.push(id);
+    const pinned = wanted.filter((id) => this.tabs.get(id)?.pinned === true);
+    const unpinned = wanted.filter((id) => this.tabs.get(id)?.pinned !== true);
+    this.reorderMap([...pinned, ...unpinned]);
+    this.scheduleNotify();
+  }
+
+  /** `tabs` is a `Map`, so its iteration order *is* the strip's order; reordering means rebuilding
+   * it in the new order, not sorting an array kept elsewhere. */
+  private reorderMap(order: number[]): void {
+    const byId = new Map(this.tabs);
+    this.tabs.clear();
+    for (const id of order) {
+      const tab = byId.get(id);
+      if (tab) this.tabs.set(id, tab);
+    }
   }
 
   /** 1-based position in the tab strip. Out-of-range positions are ignored. */
@@ -233,15 +342,26 @@ export class TabsService {
     return false;
   }
 
-  private embedInto(tab: Tab, url: string): boolean {
-    const handle = this.deps.attachEmbed(tab.view, url);
+  /** Shows `url` in a browser installed for testing, inside a new tab. False when it cannot start. */
+  openInBrowser(url: string, spec: EmbedSpec): boolean {
+    const id = this.createTab();
+    const tab = this.tabs.get(id);
+    if (tab && this.embedInto(tab, url, spec)) return true;
+    this.closeTab(id);
+    return false;
+  }
+
+  private embedInto(tab: Tab, url: string, spec?: EmbedSpec): boolean {
+    const handle = spec
+      ? this.deps.attachBrowser(tab.view, spec)
+      : this.deps.attachEmbed(tab.view, url);
     if (!handle) return false;
     this.releaseEmbed(tab);
     // Whatever the tab showed stops: a page left running underneath would keep playing.
     const current = tab.view.get_uri() ?? '';
     if (current !== '' && current !== 'about:blank') tab.view.load_uri('about:blank');
     const host = parseUrl(url)?.host ?? url;
-    const embed: TabEmbed = { handle, url, title: '' };
+    const embed: TabEmbed = { handle, url, title: '', label: spec?.label ?? '' };
     tab.embed = embed;
     tab.page = null;
     tab.error = null;
@@ -253,6 +373,8 @@ export class TabsService {
     const record = (title: string): void => {
       if (recorded || tab.embed !== embed) return;
       recorded = true;
+      // A page opened in another browser to test it is not a visit of Webswitch's own.
+      if (spec) return;
       this.deps.onPageVisit({ url, title: title || host });
     };
     handle.onTitle((title) => {
@@ -304,6 +426,22 @@ export class TabsService {
   toggleDevTools(): void {
     const view = this.getActiveView();
     if (!view) return;
+    const tab = this.getActiveTab();
+    debug(
+      'devtools',
+      `toggle: page=${tab?.page ?? 'web'} embedded=${tab?.embed != null} extras=${view.get_settings().enable_developer_extras}`,
+    );
+    // A built-in page, the home page (a blank tab) and a load error are drawn by the UI: the tab's
+    // own web view is hidden then, and WebKit gives an inspector for a hidden view a window of its
+    // own instead of docking it. So the UI is what gets inspected.
+    if (tab?.page || !this.deps.stack.get_visible()) {
+      this.deps.toggleUiDevTools(tab?.id ?? -1);
+      return;
+    }
+    if (this.deps.useChromeDevTools()) {
+      this.deps.toggleChromeDevTools(view, tab?.id ?? -1);
+      return;
+    }
     const inspector = view.get_inspector();
     if (inspector.get_web_view()) {
       inspector.close();
@@ -318,14 +456,19 @@ export class TabsService {
 
   private bindTabEvents(tab: Tab): void {
     const view = tab.view;
+    this.deps.watchInspector(view);
     const isLive = (): boolean => this.tabs.has(tab.id);
     const changed = (): void => {
       if (isLive()) this.scheduleNotify();
     };
+    // See the "preloader" retry in the load-failed handler below.
+    let retriedFrom: string | null = null;
 
     view.connect('notify::title', changed);
     view.connect('notify::uri', changed);
     view.connect('notify::is-loading', changed);
+    view.connect('notify::is-muted', changed);
+    view.connect('notify::is-playing-audio', changed);
     view.get_back_forward_list().connect('changed', changed);
 
     view.connect('load-changed', (_view, event) => {
@@ -346,6 +489,9 @@ export class TabsService {
         tab.pendingUrl = null;
       } else {
         tab.pendingUrl = null;
+        // A load that actually finished clears the retry guard, so a later, unrelated failure of
+        // the same address still gets its own one-time retry.
+        retriedFrom = null;
         if (!tab.error && tab.page === null) this.recordVisit(tab);
       }
       this.scheduleNotify();
@@ -361,6 +507,18 @@ export class TabsService {
           WebKit.PolicyError.FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE,
         )
       ) {
+        return true;
+      }
+      // A WebKit quirk seen on the very first navigation of a real, signed-in session: the main
+      // document's own preconnected/preloaded request is cancelled ("Request canceled from
+      // preloader") even though the exact same address loads cleanly right after — reported by the
+      // user, who always had to reload by hand to recover, never twice in a row. One silent,
+      // automatic retry does what they were already doing manually; a second failure of the same
+      // address still shows the real error page instead of retrying forever.
+      if (error.message.includes('preloader') && retriedFrom !== failingUri) {
+        retriedFrom = failingUri;
+        debug('load-failed', `tab ${tab.id} ${failingUri}  ${error.message} — retrying once`);
+        view.load_uri(failingUri);
         return true;
       }
       debug('load-failed', `tab ${tab.id} ${failingUri}  ${error.message} (code ${error.code})`);
@@ -460,18 +618,28 @@ export class TabsService {
         canGoForward: false,
         error: null,
         page: tab.page,
+        storeId: null,
+        pinned: tab.pinned,
+        muted: tab.view.is_muted,
+        playingAudio: tab.view.is_playing_audio,
       };
     }
     if (tab.embed) {
       return {
         id: tab.id,
-        title: tab.embed.title || (parseUrl(tab.embed.url)?.host ?? tab.embed.url),
+        title: `${tab.embed.label ? `${tab.embed.label} · ` : ''}${tab.embed.title || (parseUrl(tab.embed.url)?.host ?? tab.embed.url)}`,
         url: tab.embed.url,
         loading: false,
         canGoBack: false,
         canGoForward: false,
         error: null,
         page: null,
+        storeId: null,
+        pinned: tab.pinned,
+        // The embedded Chromium plays its own audio, outside WebKit's own view -- nothing here to
+        // mirror or control, so the mute button never shows on an embedded tab.
+        muted: false,
+        playingAudio: false,
       };
     }
     const view = tab.view;
@@ -485,6 +653,10 @@ export class TabsService {
       canGoForward: view.can_go_forward(),
       error: tab.error,
       page: null,
+      storeId: tab.error ? null : webStoreDetailId(url),
+      pinned: tab.pinned,
+      muted: view.is_muted,
+      playingAudio: view.is_playing_audio,
     };
   }
 

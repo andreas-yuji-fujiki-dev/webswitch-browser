@@ -19,7 +19,11 @@ const CONTENT_TYPES: Record<string, string> = {
  * file://, gives the UI a real origin, so its module scripts load and its CSP means something.
  * Only the UI views ever load it: tabs are barred from webswitch: URLs (see webviews.ts).
  */
-export function registerUiScheme(root: string): void {
+export function registerUiScheme(
+  root: string,
+  /** Files made when asked for, by name (`theme.css`): their text, or null when there is none. */
+  generated: (name: string) => string | null = () => null,
+): void {
   const context = WebKit.WebContext.get_default();
   const security = context.get_security_manager();
   security.register_uri_scheme_as_secure(UI_SCHEME);
@@ -36,6 +40,12 @@ export function registerUiScheme(root: string): void {
     const segments = path.split('/').filter((part) => part !== '');
     if (segments.includes('..')) {
       failure(403, 'Forbidden');
+      return;
+    }
+    const made = segments.length === 1 ? generated(segments[0] ?? '') : null;
+    if (made !== null) {
+      const bytes = new GLib.Bytes(new TextEncoder().encode(made));
+      request.finish(Gio.MemoryInputStream.new_from_bytes(bytes), bytes.get_size(), 'text/css');
       return;
     }
     const file = Gio.File.new_for_path(

@@ -1,0 +1,12 @@
+h1 {
+  outline: 3px solid rgb(1, 2, 3);
+}
+
+/* Checks that content_scripts' own css gets the same __MSG_@@extension_id__ substitution and
+   relative-url() rewriting chrome.scripting.insertCSS's files get (2026-09-29 fix, found from a
+   real Store extension's content script, "Music Identifier"'s static/styles/rate-us.css). A
+   fragment-only url(#id) must be left alone. */
+.ws-content-css-test {
+  background-image: url(chrome-extension://__MSG_@@extension_id__/fake-font.ttf);
+  filter: url(#ws-fragment-only);
+}

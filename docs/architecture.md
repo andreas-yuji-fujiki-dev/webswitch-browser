@@ -16,7 +16,7 @@ src/
 │       ├── account/       # account.service.ts (Google sign-in state), account.ipc.ts
 │       ├── history/       # history.service.ts (history.jsonl), history.ipc.ts
 │       ├── keybindings/   # keybindings.service.ts (keybindings.json), keybindings.ipc.ts
-│       ├── menu/          # menu.service.ts, menu.ipc.ts (the ⋮ popover)
+│       ├── menu/          # menu.service.ts, menu.ipc.ts (the ⋮ side panel)
 │       ├── navigation/    # navigation.service.ts, navigation.ipc.ts, url-resolver.ts
 │       ├── permissions/   # permissions.service.ts
 │       ├── shortcuts/     # shortcuts.service.ts
@@ -56,9 +56,9 @@ A blank tab, a tab that failed to load, and a tab that shows a built-in page hid
 
 **The UI is served, not loaded from disk.** The UI web view loads `webswitch://ui/index.html` through a custom URI scheme handled by `core/ui-scheme.ts`, which serves `dist/renderer/`. A real origin makes its module scripts load and its Content Security Policy meaningful. Tabs are barred from loading `webswitch:` URLs.
 
-**Built-in pages.** A tab can show a page the browser draws itself (`TabState.page`: `keybindings` and `history`). Its web view stays hidden and the UI's page area renders the page, so there is no extra web content to secure. The address bar shows it as `webswitch://keybindings`.
+**Built-in pages.** A tab can show a page the browser draws itself (`TabState.page`: `keybindings`, `history`, `cookies` and `settings`). Its web view stays hidden and the UI's page area renders the page, so there is no extra web content to secure. The address bar shows it as `webswitch://keybindings`.
 
-**The ⋮ menu is a popover.** A `Gtk.Popover` holds a small web view (the same bundled UI loaded with `?view=menu`). A popover floats above everything, page views included, and closes itself on any outside click. The menu view shares the main UI's web process and script bridge. Its size comes from the menu itself: it reports its icons' size and a `Gtk.ScrolledWindow` pins the popover to it (a web view reports a natural size as big as the window).
+**The ⋮ menu is a side panel.** It takes the right half of the window, below the tab strip and the toolbar, while the page takes the left half; closing it gives the page the whole width back. The panel is a small web view (the same bundled UI, loaded with `?view=menu`) added to the window's `Gtk.Overlay`. The overlay's `get-child-position` signal places the page area and the panel from the overlay's own size, so the split follows window resizes. This UI's page area (blank tab, History, Cookies) makes room with a CSS margin while the panel is open, and an embedded Chrome window follows the page area. The panel view shares the main UI's web process and script bridge. A bar along the panel's left edge resizes it (the width is a share of the window, kept between 240 px for the panel and for the page); the share is saved in `ui-state.json` when the drag ends and restored at startup, and every change is sent to the UI so its page area follows.
 
 ## IPC
 
@@ -73,6 +73,14 @@ Google's sign-in page loads in a tab like any other. `AccountService` never talk
 ## History
 
 `TabsService` reports each finished main-frame load of a web page (after a short pause, because WebKit sets the title a moment later) through a dependency callback; `HistoryService` records it. Entries live in memory, oldest first, and on disk as JSON Lines (`history.jsonl`): visits are appended, and removing or clearing rewrites the file. All disk access is asynchronous (Gio) and chained so writes never reorder. A visit to the same URL within 10 seconds of the previous one is not recorded again.
+
+## General settings
+
+`src/shared/settings-catalog.ts` is the catalog (id, section, kind: toggle/choice/text, default, label, description, and `effect`: `now`, `reload` or `restart`); the value types are derived from it in `src/@types/settings.ts`. `SettingsService` is the only place that validates and stores them (`~/.config/webswitch/settings.json`, only values that differ from the defaults). It is built at the very start of `runBrowser` and reads the file synchronously, because the GPU and X11 choices are needed before GTK opens the display. Anything that needs a value depends on the small `SettingsReader` (`get(id)`), which folds in the old `WEBSWITCH_*` environment overrides. Live changes: `settings.onChanged` in `bootstrap.ts` re-applies the tab preferences to every open view (`core/preferences.ts`: smooth scrolling, page cache, autoplay, WebGL, Web Inspector) and to the network session (tracking prevention, third-party cookies); new views get them when they are created, plus the ones that cannot change afterwards (`hardware_acceleration_policy`). The search engine and the download folder are read when used. A setting whose effect is `restart` is listed in `SettingsState.restartPending` while its value differs from the one this run started with; the page then offers **Restart now**, which calls `restartBrowser` (`core/restart.ts`): a shell waits until this process is gone (the app is single-instance, a new one started earlier would only hand its addresses to this one), then starts `gjs -m .../main.js <open pages>` again with the environment the browser was originally started with (not the one `runBrowser` changed), and this process quits.
+
+## Extensions
+
+Off unless the `extensions` setting is on. `ExtensionsService` installs (Web Store download → CRX3 header check → unzip → summary → user confirms) and keeps them under `~/.local/share/webswitch/extensions/<id>/`. `ExtensionRuntime` puts each extension's content scripts and styles into every tab view (WebKit user scripts in a script world of their own, with a `chrome.*` shim), hosts the background page in a hidden view, opens popups as a `Gtk.Popover` and options pages in a window, serves the files at `webswitch-ext://<id>/`, and converts Manifest V3 blocking rules into WebKit content blockers. Calls from an extension go through one script message handler per extension. Details and limits: the extensions bullet in [CLAUDE.md](../CLAUDE.md); privacy: [privacy.md](privacy.md).
 
 ## Keybindings
 
@@ -103,7 +111,7 @@ GJS has no `URL`, `URLSearchParams`, `queueMicrotask` or `structuredClone`, so `
 
 ## Tests
 
-`npm run selftest` opens a real window and drives the browser through the same IPC the UI uses (and real GDK key events), checking tabs, navigation, popups, shortcuts, the menu, History, Keybindings, the inspector, zoom and errors, and saving screenshots of the UI and of the composed window. `npm run measure` runs the browser in an empty network namespace and reports every network attempt (see [privacy.md](privacy.md)).
+`npm run selftest` opens a real window and drives the browser through the same IPC the UI uses (and real GDK key events), checking tabs, navigation, popups, shortcuts, the menu, History, Keybindings, the inspector, zoom and errors (`WEBSWITCH_SELFTEST_EXTENSIONS=1` runs the extensions scenario with local fixtures), and saving screenshots of the UI and of the composed window. `npm run measure` runs the browser in an empty network namespace and reports every network attempt (see [privacy.md](privacy.md)).
 
 ## Embedded Chrome tabs
 
@@ -112,6 +120,6 @@ By default (`WEBSWITCH_EMBED_DRM=0` turns it off) a mode is on in which a DRM pa
 1. `EmbedService` (`features/drm/embed.service.ts`) starts `helpers/x11-embed.py` (copied to `dist/`). GJS cannot call Xlib, so the helper does: it creates a container window inside the browser's X11 window.
 2. Chrome is started in app mode on X11 with the profile in `~/.local/share/webswitch/drm-profile`. Chrome's process for that profile is named by the profile's `SingletonLock`; the helper adopts that process's first managed window.
 3. Adoption follows ICCCM 4.1.4: the window is withdrawn, the helper waits until the window manager (mutter) has let go of it (its parent is the root again), then reparents it into the container and maps it. Reparenting a mapped, managed window does not work: the window manager frames it again.
-4. The tab is an ordinary blank web view; its allocation is the rectangle. A tick callback follows it (position, size, whether the tab is showing, and whether the ⋮ menu covers it) and sends `place`, `show` and `hide` to the helper. A once-a-second `alive` check closes the tab when the Chrome window goes away.
+4. The tab is an ordinary blank web view; its allocation is the rectangle. A tick callback follows it (position, size, and whether the tab is showing) and sends `place`, `show` and `hide` to the helper. A once-a-second `alive` check closes the tab when the Chrome window goes away.
 
 `TabsService` keeps `Tab.embed` for such a tab. The tab's title and address come from the URL, not from the page.

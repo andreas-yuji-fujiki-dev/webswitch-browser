@@ -1,14 +1,18 @@
-import { DEFAULT_SEARCH_ENGINE } from '../../core/config';
+import { searchEngineFor } from '../../core/config';
+import type { SettingsReader } from '~types/settings';
 import type { TabsService } from '../tabs/tabs.service';
 import { resolveInput } from './url-resolver';
 
 /** Navigation commands for the active tab. */
 export class NavigationService {
-  constructor(private readonly tabs: TabsService) {}
+  constructor(
+    private readonly tabs: TabsService,
+    private readonly settings: SettingsReader,
+  ) {}
 
   navigate(input: string): void {
     const tabId = this.tabs.getActiveTabId();
-    const url = resolveInput(input, DEFAULT_SEARCH_ENGINE);
+    const url = resolveInput(input, searchEngineFor(this.settings.get('searchEngine')));
     if (tabId === null || url === null) return;
     this.tabs.loadUrl(tabId, url);
     this.tabs.focusContent();

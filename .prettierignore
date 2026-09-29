@@ -4,3 +4,4 @@ out
 LICENSE
 package-lock.json
 dist
+dist-selftest

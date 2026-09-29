@@ -1,8 +1,9 @@
 import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
+import type { EmbedSpec } from '~types/browsers';
 import type { DrmBrowser } from '~types/drm';
 import { parseUrl } from '../../core/url';
-import { chromeArguments, prepareProfile } from './drm-launch';
+import { chromeArguments, drmBrowserPid, prepareProfile } from './drm-launch';
 import { DRM_BROWSERS, DRM_HOSTS } from './drm-sites';
 
 /**
@@ -13,6 +14,9 @@ import { DRM_BROWSERS, DRM_HOSTS } from './drm-sites';
  */
 export class DrmService {
   private browser: DrmBrowser | null | undefined;
+
+  /** `managed` returns a browser installed by Webswitch when the user chose one for streaming. */
+  constructor(private readonly managed: () => DrmBrowser | null = () => null) {}
 
   /** True when `url` is a page that needs DRM. */
   needsDrm(url: string): boolean {
@@ -40,8 +44,23 @@ export class DrmService {
     }
   }
 
-  /** The Chromium-family browser used for DRM pages, or null when none is installed. */
+  /** How to start the DRM browser inside a tab, or null when none is available. */
+  embedSpec(url: string): EmbedSpec | null {
+    const browser = this.findBrowser();
+    if (!browser) return null;
+    prepareProfile();
+    return { argv: chromeArguments(browser.path, url, true), pid: drmBrowserPid };
+  }
+
+  /** A Chromium-family browser for DRM pages: the one chosen in Test browsers, else the system's. */
   findBrowser(): DrmBrowser | null {
+    const chosen = this.managed();
+    if (chosen) return chosen;
+    return this.findSystemBrowser();
+  }
+
+  /** The Chromium-family browser found on this machine, or null. */
+  findSystemBrowser(): DrmBrowser | null {
     if (this.browser !== undefined) return this.browser;
     for (const { command, name } of DRM_BROWSERS) {
       const path = GLib.find_program_in_path(command);

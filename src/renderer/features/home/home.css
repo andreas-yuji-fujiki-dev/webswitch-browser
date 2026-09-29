@@ -1,0 +1,104 @@
+/* The wordmark, and under it (at its left) the list of search engines. */
+.home {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  max-width: 100%;
+}
+
+/* The search engine list. */
+.home__engine {
+  position: relative;
+  flex: none;
+}
+
+.home__engine::after {
+  content: '▾';
+  position: absolute;
+  top: 50%;
+  right: 0;
+  color: var(--color-fg-muted);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+/* Measures the name that is chosen; the select is sized to it (see home.ts). */
+.home__engine-measure {
+  position: absolute;
+  visibility: hidden;
+  padding-right: calc(var(--space-1) + 1em);
+  font: inherit;
+  white-space: pre;
+}
+
+.home__engine-select {
+  height: var(--control-size);
+  padding: 0 calc(var(--space-1) + 1em) 0 0;
+  border: 0;
+  background: none;
+  color: var(--color-fg-muted);
+  font: inherit;
+  cursor: pointer;
+  appearance: none;
+}
+
+.home__engine-select:hover,
+.home__engine-select:focus {
+  color: var(--color-accent);
+  outline: none;
+}
+
+.home__engine:hover::after,
+.home__engine:focus-within::after {
+  color: var(--color-accent);
+}
+
+.wordmark {
+  min-width: 0;
+  margin: 0;
+  color: var(--color-brand);
+  font-family: var(--font-mono);
+  font-size: var(--wordmark-size);
+  letter-spacing: -0.02em;
+  cursor: text;
+}
+
+.wordmark__dim {
+  opacity: var(--wordmark-dim);
+}
+
+/* The field where the cursor was. The hidden copy of the text sets its width; it blinks like a cursor
+   on its own, so nothing is animated by the page. */
+.wordmark__field {
+  display: inline-grid;
+  max-width: min(50vw, 720px);
+  min-width: 0.6em;
+  margin-left: 0.05em;
+  overflow: hidden;
+  vertical-align: bottom;
+}
+
+.wordmark__field::after {
+  content: attr(data-value) ' ';
+  grid-area: 1 / 1;
+  overflow: hidden;
+  visibility: hidden;
+  white-space: pre;
+}
+
+.wordmark__input {
+  grid-area: 1 / 1;
+  /* No width of its own (an input is 20 characters wide otherwise): the hidden copy of the text sets
+     the width of the grid, and the input fills it. */
+  width: 0;
+  min-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  caret-color: var(--color-brand);
+  color: var(--color-fg-strong);
+  font: inherit;
+  letter-spacing: inherit;
+  outline: none;
+}

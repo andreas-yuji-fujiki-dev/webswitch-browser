@@ -45,6 +45,10 @@ const browserApi: BrowserApi = {
     close: (tabId) => invoke(IPC_CHANNELS.tabs.close, tabId),
     activate: (tabId) => invoke(IPC_CHANNELS.tabs.activate, tabId),
     setChromeHeight: (heightPx) => invoke(IPC_CHANNELS.tabs.setChromeHeight, heightPx),
+    openHttpStatus: (status) => invoke(IPC_CHANNELS.tabs.openHttpStatus, status),
+    setPinned: (tabId, pinned) => invoke(IPC_CHANNELS.tabs.setPinned, tabId, pinned),
+    setMuted: (tabId, muted) => invoke(IPC_CHANNELS.tabs.setMuted, tabId, muted),
+    reorder: (order) => invoke(IPC_CHANNELS.tabs.reorder, order),
     onStateChanged: (listener) => subscribe(IPC_CHANNELS.tabs.stateChanged, listener),
   },
   navigation: {
@@ -64,10 +68,8 @@ const browserApi: BrowserApi = {
     onWindowControls: (listener) => subscribe(IPC_CHANNELS.ui.windowControls, listener),
   },
   menu: {
-    toggle: (anchorRight, anchorBottom) =>
-      invoke(IPC_CHANNELS.menu.toggle, anchorRight, anchorBottom),
+    toggle: () => invoke(IPC_CHANNELS.menu.toggle),
     close: () => invoke(IPC_CHANNELS.menu.close),
-    setSize: (width, height) => invoke(IPC_CHANNELS.menu.setSize, width, height),
     select: (itemId) => invoke(IPC_CHANNELS.menu.select, itemId),
     onStateChanged: (listener) => subscribe(IPC_CHANNELS.menu.stateChanged, listener),
   },
@@ -84,8 +86,27 @@ const browserApi: BrowserApi = {
         listener();
       }),
   },
+  bookmarks: {
+    get: () => invoke(IPC_CHANNELS.bookmarks.get),
+    add: (url, title, folderId) => invoke(IPC_CHANNELS.bookmarks.add, url, title, folderId),
+    update: (id, changes) => invoke(IPC_CHANNELS.bookmarks.update, id, changes),
+    remove: (id) => invoke(IPC_CHANNELS.bookmarks.remove, id),
+    addFolder: (title, parentId) => invoke(IPC_CHANNELS.bookmarks.addFolder, title, parentId),
+    renameFolder: (id, title) => invoke(IPC_CHANNELS.bookmarks.renameFolder, id, title),
+    removeFolder: (id) => invoke(IPC_CHANNELS.bookmarks.removeFolder, id),
+    reorderBar: (order) => invoke(IPC_CHANNELS.bookmarks.reorderBar, order),
+    openPopup: (kind, itemId, x, y, width, height) =>
+      invoke(IPC_CHANNELS.bookmarks.openPopup, kind, itemId, x, y, width, height),
+    closePopup: () => invoke(IPC_CHANNELS.bookmarks.closePopup),
+    onShortcut: (listener) =>
+      subscribe(IPC_CHANNELS.bookmarks.shortcut, () => {
+        listener();
+      }),
+    onChanged: (listener) => subscribe(IPC_CHANNELS.bookmarks.changed, listener),
+  },
   cookies: {
     get: () => invoke(IPC_CHANNELS.cookies.get),
+    summary: () => invoke(IPC_CHANNELS.cookies.summary),
     remove: (ids) => invoke(IPC_CHANNELS.cookies.remove, ids),
     setPolicy: (ids, policy) => invoke(IPC_CHANNELS.cookies.setPolicy, ids, policy),
     setCompanyPolicy: (company, policy) =>
@@ -95,6 +116,59 @@ const browserApi: BrowserApi = {
       subscribe(IPC_CHANNELS.cookies.changed, () => {
         listener();
       }),
+  },
+  settings: {
+    get: () => invoke(IPC_CHANNELS.settings.get),
+    set: (id, value) => invoke(IPC_CHANNELS.settings.set, id, value),
+    reset: (id) => invoke(IPC_CHANNELS.settings.reset, id),
+    resetAll: () => invoke(IPC_CHANNELS.settings.resetAll),
+    restart: () => invoke(IPC_CHANNELS.settings.restart),
+    onChanged: (listener) => subscribe(IPC_CHANNELS.settings.changed, listener),
+  },
+  extensions: {
+    get: () => invoke(IPC_CHANNELS.extensions.get),
+    prepareStore: (input) => invoke(IPC_CHANNELS.extensions.prepareStore, input),
+    prepareFolder: (path) => invoke(IPC_CHANNELS.extensions.prepareFolder, path),
+    chooseFolder: () => invoke(IPC_CHANNELS.extensions.chooseFolder),
+    confirm: () => invoke(IPC_CHANNELS.extensions.confirm),
+    cancel: () => invoke(IPC_CHANNELS.extensions.cancel),
+    setEnabled: (id, enabled) => invoke(IPC_CHANNELS.extensions.setEnabled, id, enabled),
+    remove: (id) => invoke(IPC_CHANNELS.extensions.remove, id),
+    openPopup: (id, x, y, width, height) =>
+      invoke(IPC_CHANNELS.extensions.openPopup, id, x, y, width, height),
+    openOptions: (id) => invoke(IPC_CHANNELS.extensions.openOptions, id),
+    openStore: () => invoke(IPC_CHANNELS.extensions.openStore),
+    clearProxy: () => invoke(IPC_CHANNELS.extensions.clearProxy),
+    onChanged: (listener) => subscribe(IPC_CHANNELS.extensions.changed, listener),
+  },
+  browsers: {
+    get: () => invoke(IPC_CHANNELS.browsers.get),
+    check: () => invoke(IPC_CHANNELS.browsers.check),
+    install: (id, version) => invoke(IPC_CHANNELS.browsers.install, id, version),
+    uninstall: (id, version) => invoke(IPC_CHANNELS.browsers.uninstall, id, version),
+    use: (id, version) => invoke(IPC_CHANNELS.browsers.use, id, version),
+    open: (id) => invoke(IPC_CHANNELS.browsers.open, id),
+    setStreaming: (choice) => invoke(IPC_CHANNELS.browsers.setStreaming, choice),
+    onChanged: (listener) => subscribe(IPC_CHANNELS.browsers.changed, listener),
+  },
+  themes: {
+    get: () => invoke(IPC_CHANNELS.themes.get),
+    select: (id) => invoke(IPC_CHANNELS.themes.select, id),
+    add: (json) => invoke(IPC_CHANNELS.themes.add, json),
+    importFile: () => invoke(IPC_CHANNELS.themes.importFile),
+    searchVsx: (query, offset, sort) => invoke(IPC_CHANNELS.themes.searchVsx, query, offset, sort),
+    installVsx: (namespace, name) => invoke(IPC_CHANNELS.themes.installVsx, namespace, name),
+    installPopular: (count) => invoke(IPC_CHANNELS.themes.installPopular, count),
+    remove: (id) => invoke(IPC_CHANNELS.themes.remove, id),
+    onChanged: (listener) => subscribe(IPC_CHANNELS.themes.changed, listener),
+  },
+  devtools: {
+    get: () => invoke(IPC_CHANNELS.devtools.get),
+    use: (id) => invoke(IPC_CHANNELS.devtools.use, id),
+    check: () => invoke(IPC_CHANNELS.devtools.check),
+    download: (id, version) => invoke(IPC_CHANNELS.devtools.download, id, version),
+    uninstall: (id) => invoke(IPC_CHANNELS.devtools.uninstall, id),
+    onChanged: (listener) => subscribe(IPC_CHANNELS.devtools.changed, listener),
   },
   keybindings: {
     get: () => invoke(IPC_CHANNELS.keybindings.get),

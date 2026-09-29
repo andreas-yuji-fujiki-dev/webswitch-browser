@@ -3,9 +3,9 @@ import GdkX11 from 'gi://GdkX11?version=4.0';
 import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 import type Gtk from 'gi://Gtk?version=4.0';
-import type { DrmBrowser, EmbedHandle } from '~types/drm';
+import type { EmbedSpec } from '~types/browsers';
+import type { EmbedHandle } from '~types/drm';
 import { distDir } from '../../core/paths';
-import { chromeArguments, drmProfileDir, prepareProfile } from './drm-launch';
 import { DRM_BROWSERS } from './drm-sites';
 
 Gio._promisify(Gio.DataInputStream.prototype, 'read_line_async', 'read_line_finish');
@@ -20,19 +20,26 @@ const ALIVE_POLL_MS = 1000;
 
 /**
  * Whether the browser should run on X11 so DRM pages can be embedded. On by default when it can
- * work (an X display, python3 for the helper, a Chromium-family browser); WEBSWITCH_EMBED_DRM=0
+ * work (an X display, python3 for the helper, a Chromium-family browser); the `embedStreaming` setting (or WEBSWITCH_EMBED_DRM=0)
  * turns it off and keeps Wayland with the app-window hand-off.
  */
-export function embeddingRequested(): boolean {
-  if (GLib.getenv('WEBSWITCH_EMBED_DRM') === '0') return false;
+export function embeddingRequested(wanted: boolean, browsersToTest = false): boolean {
+  if (!wanted) return false;
   if (GLib.getenv('DISPLAY') === null || GLib.find_program_in_path('python3') === null)
     return false;
-  return DRM_BROWSERS.some(({ command }) => GLib.find_program_in_path(command) !== null);
+  // Also when browsers were installed to test pages in: they are shown inside tabs the same way.
+  return (
+    browsersToTest ||
+    DRM_BROWSERS.some(({ command }) => GLib.find_program_in_path(command) !== null)
+  );
 }
 
 /** True when embedding was requested and the window really is an X11 one. */
-export function embeddingAvailable(): boolean {
-  return embeddingRequested() && Gdk.Display.get_default() instanceof GdkX11.X11Display;
+export function embeddingAvailable(wanted: boolean, browsersToTest = false): boolean {
+  return (
+    embeddingRequested(wanted, browsersToTest) &&
+    Gdk.Display.get_default() instanceof GdkX11.X11Display
+  );
 }
 
 /** The helper process that talks Xlib for us; one command per line, one answer per command. */
@@ -74,24 +81,19 @@ class X11Helper {
 }
 
 /**
- * EXPERIMENTAL. Puts a real Chrome window inside a tab: the window is launched in app mode and
- * reparented (X11) into a container that follows the tab's area. Needs the whole browser to run on
+ * Puts another program's window inside a tab (Chrome for streaming sites, Firefox or Edge to test a
+ * page in): the program is started from an `EmbedSpec` and its window is reparented (X11) into a
+ * container that follows the tab's area. Needs the whole browser to run on
  * X11 (through XWayland), because Wayland has no way to embed another program's window.
  */
 export class EmbedService {
-  constructor(
-    private readonly window: Gtk.Window,
-    private readonly browser: () => DrmBrowser | null,
-    /** True while something (the ⋮ menu) must be drawn over the tab area. */
-    private readonly covered: () => boolean,
-  ) {}
+  constructor(private readonly window: Gtk.Window) {}
 
-  /** Embeds `url` in a Chrome window over `area`. Returns null when it cannot be started. */
-  attach(area: Gtk.Widget, url: string): EmbedHandle | null {
-    const browser = this.browser();
+  /** Embeds what `spec` starts in a window over `area`. Returns null when it cannot be started. */
+  attach(area: Gtk.Widget, spec: EmbedSpec | null): EmbedHandle | null {
     const surface = this.window.get_surface();
-    if (!browser || !(surface instanceof GdkX11.X11Surface)) return null;
-    prepareProfile();
+    if (spec === null || !(surface instanceof GdkX11.X11Surface)) return null;
+    let child: Gio.Subprocess | null = null;
 
     const helper = new X11Helper();
     const closedListeners: (() => void)[] = [];
@@ -114,6 +116,7 @@ export class EmbedService {
         helper.dispose();
         return GLib.SOURCE_REMOVE;
       });
+      spec.cleanup?.();
       if (notify) for (const listener of closedListeners) listener();
     };
 
@@ -132,7 +135,7 @@ export class EmbedService {
     // Follows the tab: position, size, and whether the tab is showing at all.
     const sync = (): void => {
       if (!ready || closed) return;
-      const wantVisible = area.get_mapped() && !this.covered();
+      const wantVisible = area.get_mapped();
       const rect = geometry();
       if (rect !== null && rect !== lastRect) {
         lastRect = rect;
@@ -155,13 +158,20 @@ export class EmbedService {
         return;
       }
       try {
-        Gio.Subprocess.new(chromeArguments(browser.path, url, true), Gio.SubprocessFlags.NONE);
+        const launcher = new Gio.SubprocessLauncher({ flags: Gio.SubprocessFlags.STDERR_SILENCE });
+        for (const entry of spec.env ?? []) {
+          const at = entry.indexOf('=');
+          launcher.setenv(entry.slice(0, at), entry.slice(at + 1), true);
+        }
+        child = launcher.spawnv(spec.argv);
       } catch {
         finish(true);
         return;
       }
+      const startedPid = Number(child.get_identifier());
 
-      // Chrome's process for this profile owns every window we launch; SingletonLock names it.
+      // The process that owns the window: the one started, or (Chrome's streaming profile, shared
+      // with earlier windows) the one its profile lock names.
       const started = GLib.get_monotonic_time();
       const timedOut = (): boolean =>
         (GLib.get_monotonic_time() - started) / 1000 > ADOPT_TIMEOUT_MS;
@@ -175,7 +185,7 @@ export class EmbedService {
           finish(true);
           return;
         }
-        const pid = this.browserPid();
+        const pid = spec.pid ? spec.pid(startedPid) : startedPid;
         if (pid !== null) {
           const answer = await helper.request(`adopt pid ${pid} ${ADOPT_WAIT_MS}`);
           if (answer.startsWith('ok')) break;
@@ -224,6 +234,7 @@ export class EmbedService {
       onTitle: (listener) => {
         titleListeners.push(listener);
       },
+      probe: (line) => helper.request(line),
       focus: () => {
         if (ready && !closed) void helper.request('focus');
       },
@@ -231,21 +242,14 @@ export class EmbedService {
         if (closed) return;
         void helper.request('close');
         finish(false);
+        // A browser started for this tab alone does not outlive it.
+        if (spec.killOnClose) {
+          GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, () => {
+            child?.force_exit();
+            return GLib.SOURCE_REMOVE;
+          });
+        }
       },
     };
-  }
-
-  /** The process id in Chrome's profile lock ("host-1234" is a symlink target), or null. */
-  private browserPid(): number | null {
-    const lock = Gio.File.new_for_path(GLib.build_filenamev([drmProfileDir(), 'SingletonLock']));
-    try {
-      const target = lock
-        .query_info('standard::symlink-target', Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null)
-        .get_symlink_target();
-      const pid = Number(target?.split('-').at(-1));
-      return Number.isInteger(pid) && pid > 0 ? pid : null;
-    } catch {
-      return null;
-    }
   }
 }

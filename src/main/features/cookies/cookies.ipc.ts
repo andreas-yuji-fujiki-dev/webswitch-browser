@@ -10,6 +10,7 @@ export function registerCookiesIpc(
   openUrl: (url: string) => void,
 ): void {
   router.handle(IPC_CHANNELS.cookies.get, () => service.getState());
+  router.handle(IPC_CHANNELS.cookies.summary, () => service.summary());
   router.handle(IPC_CHANNELS.cookies.remove, (ids) =>
     service.remove(Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : []),
   );

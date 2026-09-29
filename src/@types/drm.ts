@@ -12,6 +12,8 @@ export interface EmbedHandle {
   onClosed(listener: () => void): void;
   /** Called with the embedded window's title (Chrome sets it to the page title) whenever it changes. */
   onTitle(listener: (title: string) => void): void;
+  /** Debugging: sends one command to the X11 helper (`geometry`, `shotparent <path>`) and returns its answer. */
+  probe(line: string): Promise<string>;
   /** Gives the embedded window the keyboard focus. */
   focus(): void;
   /** Closes the embedded window and stops following the tab. */

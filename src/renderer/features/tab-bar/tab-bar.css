@@ -47,12 +47,46 @@
   color: var(--color-fg-strong);
 }
 
+/* Dragging (tab-bar.ts's pointer-driven reorder, the same design as the bookmarks bar's): the
+   dragged tile dims, the tile under the pointer gets an accent edge -- same treatment as
+   bookmarks.css's `.is-dragging`/`.is-drop-target`, so a drag reads the same way everywhere. */
+.tab.is-dragging {
+  opacity: 0.4;
+}
+
+.tab.is-drop-target {
+  box-shadow: -2px 0 0 0 var(--color-accent);
+}
+
+/* A pinned tab collapses to a narrow, icon-only tile (Chrome's own convention) right after the
+   group of other pinned tabs -- `TabsService.setPinned`/`reorderTabs` keep them first, so no
+   separate container is needed here, just a border where the groups meet. */
+.tab[data-pinned='true'] {
+  flex: none;
+  min-width: 0;
+  /* No forced width: with the title hidden and the close button removed below, the tile's own
+     content (the pin button, plus the mute button only while it is actually shown) already sizes
+     it to exactly one icon's width, or two while audible -- nothing to reserve space for. */
+  padding: 0;
+  justify-content: center;
+}
+
+.tab[data-pinned='true'] + .tab:not([data-pinned='true']) {
+  margin-left: var(--space-2);
+  padding-left: var(--space-2);
+  border-left: var(--border-width) solid var(--color-border);
+}
+
 .tab__title {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tab[data-pinned='true'] .tab__title {
+  display: none;
 }
 
 .tab[data-loading='true'] .tab__title::before {
@@ -67,6 +101,8 @@
 }
 
 .tab__close,
+.tab__pin,
+.tab__mute,
 .tab-new {
   display: grid;
   flex: none;
@@ -75,16 +111,58 @@
   color: var(--color-fg-muted);
 }
 
-.tab__close {
+.tab__close,
+.tab__pin,
+.tab__mute {
   width: calc(var(--tab-box-height) - var(--space-3));
   height: calc(var(--tab-box-height) - var(--space-3));
-  /* Close buttons stay out of the way until the tab is hovered or active. */
+}
+
+/* Close and pin stay out of the way until the tab is hovered, active, or (pin only) already
+   pinned -- a pinned tab has no room to spare, so its pin button is what the tile shows instead
+   of a title, and its close button is hidden entirely (Ctrl+W still closes it). */
+.tab__close,
+.tab__pin {
   opacity: 0;
 }
 
 .tab:hover .tab__close,
-.tab[data-active='true'] .tab__close {
+.tab[data-active='true'] .tab__close,
+.tab:hover .tab__pin,
+.tab[data-active='true'] .tab__pin,
+.tab[data-pinned='true'] .tab__pin {
   opacity: 1;
+}
+
+.tab[data-pinned='true'] .tab__close {
+  display: none;
+}
+
+/* The mute control only shows while it says something: the tab is audible right now, or already
+   muted -- Chrome's own rule, not shown (and not even given layout space, unlike the hover-only
+   close/pin buttons above) on every tab regardless of hover. */
+.tab__mute {
+  display: none;
+}
+
+.tab[data-audible='true'] .tab__mute {
+  display: grid;
+}
+
+.tab__pin:hover,
+.tab__mute:hover {
+  color: var(--color-fg-strong);
+}
+
+/* Filled and accent-colored while active, the same on/off treatment the bookmark star and folder
+   icons already use, not a second class toggled from JS. */
+.tab[data-pinned='true'] .tab__pin .icon {
+  fill: var(--color-accent);
+  stroke: none;
+}
+
+.tab[data-muted='true'] .tab__mute {
+  color: var(--color-accent);
 }
 
 .tab-new {

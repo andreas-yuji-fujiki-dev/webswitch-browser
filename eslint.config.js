@@ -34,6 +34,7 @@ module.exports = tseslint.config(
   {
     ignores: [
       'dist/**',
+      'dist-selftest/**',
       'tools/**',
       'out/**',
       'node_modules/**',

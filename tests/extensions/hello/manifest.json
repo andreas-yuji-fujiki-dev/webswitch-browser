@@ -1,0 +1,53 @@
+{
+  "manifest_version": 3,
+  "name": "__MSG_name__",
+  "version": "1.2.3",
+  "default_locale": "en",
+  "description": "Fixture extension for the self-test",
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting",
+    "webNavigation",
+    "webRequest",
+    "contextMenus",
+    "cookies",
+    "alarms",
+    "declarativeNetRequest",
+    "nativeMessaging",
+    "webRequestAuthProvider",
+    "proxy",
+    "userScripts",
+    "webRequestBlocking",
+    "downloads",
+    "browsingData",
+    "sessions",
+    "offscreen",
+    "history",
+    "pageCapture"
+  ],
+  "host_permissions": ["*://localhost/*", "*://127.0.0.1/*"],
+  "background": {
+    "service_worker": "bg.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://localhost/*", "*://127.0.0.1/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_end"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html",
+  "commands": {
+    "ping-command": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y"
+      },
+      "description": "Fixture command"
+    }
+  }
+}

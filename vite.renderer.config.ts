@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { defineConfig } from 'vite';
-import { alias } from './vite.common';
+import { alias, OUT_DIR } from './vite.common';
 
 // The browser UI, served to the UI web view through the webswitch:// scheme.
 export default defineConfig({
@@ -8,7 +8,7 @@ export default defineConfig({
   base: './',
   resolve: { alias },
   build: {
-    outDir: path.resolve(__dirname, 'dist/renderer'),
+    outDir: path.resolve(__dirname, OUT_DIR, 'renderer'),
     emptyOutDir: true,
     target: 'esnext',
   },

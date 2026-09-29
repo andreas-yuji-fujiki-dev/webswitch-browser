@@ -1,3 +1,4 @@
+import Gio from 'gi://Gio?version=2.0';
 import GLib from 'gi://GLib?version=2.0';
 import type { ChromePreferences } from '~types/drm';
 import { ensureDir } from '../../core/files';
@@ -58,4 +59,18 @@ export function prepareProfile(): void {
   prefs.profile.default_content_setting_values ??= {};
   prefs.profile.default_content_setting_values.notifications = BLOCK;
   GLib.file_set_contents(path, JSON.stringify(prefs));
+}
+
+/** The process id in Chrome's profile lock ("host-1234" is a symlink target), or null. */
+export function drmBrowserPid(): number | null {
+  const lock = Gio.File.new_for_path(GLib.build_filenamev([drmProfileDir(), 'SingletonLock']));
+  try {
+    const target = lock
+      .query_info('standard::symlink-target', Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null)
+      .get_symlink_target();
+    const pid = Number(target?.split('-').at(-1));
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
 }

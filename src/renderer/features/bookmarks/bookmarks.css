@@ -1,0 +1,185 @@
+#bookmarks-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 32px;
+  padding: 0 var(--space-4);
+  overflow-x: auto;
+  border-top: var(--border-width) solid var(--color-border);
+}
+
+#bookmarks-bar:empty,
+#bookmarks-bar[hidden] {
+  display: none;
+}
+
+.bookmark-item {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  height: 24px;
+  padding: 0 var(--space-2);
+  max-width: 180px;
+  color: var(--color-fg-soft);
+  white-space: nowrap;
+}
+
+.bookmark-item .icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+/* Both filled with the theme's accent color, not the muted gray text -- a folder is drawn with
+   sharp, angular corners (see icons.ts), not the rounded one this replaced. */
+.bookmark-item__icon--folder,
+.bookmark-item__icon--bookmark {
+  color: var(--color-accent);
+}
+
+.bookmark-item__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bookmark-item:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-fg-strong);
+}
+
+.bookmark-item.is-dragging {
+  opacity: 0.4;
+}
+
+.bookmark-item.is-drop-target {
+  box-shadow: -2px 0 0 0 var(--color-accent);
+}
+
+/* The star button in the address bar: pink and filled once the page is bookmarked. */
+.bookmark-star.is-active {
+  color: var(--color-accent);
+}
+
+/* The star's edit form and a folder's contents: a real Gtk.Popover, so this view is its own
+   small page, not an overlay inside the browser UI's own document (see bookmarks-popup.ts). */
+[data-view='bookmarks-popup'],
+[data-view='bookmarks-popup'] body {
+  background: var(--color-bg);
+}
+
+.bm-popup {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  height: 100%;
+  padding: var(--space-4);
+}
+
+/* The folder right-click menu (rename/delete only, no content list): a smaller popover, so a
+   tighter gap keeps the name field and the buttons from sitting too far apart in it. */
+.bm-popup--compact {
+  gap: var(--space-2);
+}
+
+.bm-popup__header {
+  margin: 0;
+  color: var(--color-fg-strong);
+  font-size: var(--font-size);
+  font-weight: 600;
+}
+
+.bm-popup__label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--color-fg-soft);
+  font-size: 12px;
+}
+
+.bm-popup__input,
+.bm-popup__select {
+  height: var(--control-size);
+  padding: 0 var(--space-2);
+  border: var(--border-width) solid var(--color-border);
+  background: var(--color-input-bg);
+  color: var(--color-fg);
+  font-family: inherit;
+  font-size: var(--font-size);
+}
+
+.bm-popup__input:focus,
+.bm-popup__select:focus {
+  border-color: var(--color-accent);
+  outline: none;
+}
+
+.bm-popup__actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: auto;
+}
+
+.bm-popup__button {
+  flex: 1;
+  height: var(--control-size);
+  border: var(--border-width) solid var(--color-border);
+  background: transparent;
+  color: var(--color-fg);
+}
+
+.bm-popup__button:hover {
+  background: var(--color-surface-hover);
+}
+
+.bm-popup__button--primary {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.bm-popup__button--danger {
+  color: var(--color-danger);
+}
+
+.bm-popup__list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-1);
+  overflow-y: auto;
+}
+
+.bm-popup__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 32px;
+  padding: 0 var(--space-2);
+  color: var(--color-fg);
+  text-align: left;
+}
+
+.bm-popup__row .icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--color-accent);
+}
+
+.bm-popup__row-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bm-popup__row:hover {
+  background: var(--color-surface-hover);
+}
+
+.bm-popup__empty {
+  margin: 0;
+  color: var(--color-fg-muted);
+  font-size: 12px;
+}
