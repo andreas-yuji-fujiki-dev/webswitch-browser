@@ -88,6 +88,15 @@ export function createTabBar(container: HTMLElement, api: BrowserApi): StateView
 
     root.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return;
+      // A press starting on one of the tab's own buttons must not be captured for dragging:
+      // `setPointerCapture` retargets *every* subsequent event for this pointer -- including the
+      // `click` a real press-and-release still fires -- to whichever element called it, per the
+      // Pointer Events spec, regardless of which element the pointer is actually over. Capturing
+      // here unconditionally silently broke each button's own click handler (close never closed
+      // the tab; pin/mute's own click never fired, only root's click-to-activate did, through the
+      // same retargeting). Letting the press through untouched here means the button's own click
+      // listener gets the event normally, exactly as if no drag-tracking code existed at all.
+      if ((event.target as HTMLElement).closest('.tab__pin, .tab__mute, .tab__close')) return;
       down = { id, x: event.clientX, y: event.clientY, started: false };
       root.setPointerCapture(event.pointerId);
     });
